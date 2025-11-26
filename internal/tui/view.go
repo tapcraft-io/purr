@@ -92,65 +92,10 @@ func (m Model) renderTypingMode() string {
 	b.WriteString(title)
 	b.WriteString("\n\n")
 
-	// Command input with inline suggestion
+	// Command input (textinput handles suggestions natively)
 	b.WriteString(RenderPrompt())
-	inputView := m.commandInput.View()
-	b.WriteString(inputView)
-
-	// Show inline autocomplete suggestion if available
-	if len(m.suggestions) > 0 {
-		suggestion := m.suggestions[m.selectedSuggestion]
-		currentInput := m.commandInput.Value()
-		trimmed := strings.TrimSpace(currentInput)
-
-		// Remove kubectl prefix if present for matching
-		if strings.HasPrefix(trimmed, "kubectl ") {
-			trimmed = strings.TrimPrefix(trimmed, "kubectl ")
-		}
-
-		// Check if there's a trailing space (meaning we're suggesting a new token)
-		hasTrailingSpace := len(currentInput) > 0 && currentInput[len(currentInput)-1] == ' '
-
-		if hasTrailingSpace {
-			// Show full suggestion as a new token
-			b.WriteString(dimStyle.Render(suggestion))
-		} else {
-			// Show completion of current token
-			parts := strings.Fields(trimmed)
-			if len(parts) > 0 {
-				lastPart := parts[len(parts)-1]
-				// Only show suggestion if it starts with what user typed
-				if strings.HasPrefix(suggestion, lastPart) {
-					remainder := strings.TrimPrefix(suggestion, lastPart)
-					b.WriteString(dimStyle.Render(remainder))
-				}
-			}
-		}
-	}
-
-	b.WriteString("\n")
-
-	// Show available suggestions
-	if len(m.suggestions) > 1 {
-		b.WriteString(dimStyle.Render("  Suggestions: "))
-		for i, sug := range m.suggestions {
-			if i > 5 {
-				// Limit to 6 suggestions
-				b.WriteString(dimStyle.Render("..."))
-				break
-			}
-			if i == m.selectedSuggestion {
-				b.WriteString(highlightStyle.Render(sug))
-			} else {
-				b.WriteString(dimStyle.Render(sug))
-			}
-			if i < len(m.suggestions)-1 && i < 5 {
-				b.WriteString(dimStyle.Render(", "))
-			}
-		}
-		b.WriteString("\n")
-	}
-	b.WriteString("\n")
+	b.WriteString(m.commandInput.View())
+	b.WriteString("\n\n")
 
 	// Show status message if present
 	if m.statusMsg != "" {
@@ -274,8 +219,9 @@ func (m Model) renderConfirmingMode() string {
 // renderHelpBar renders the help bar at the bottom
 func (m Model) renderHelpBar() string {
 	items := []string{
-		"[Tab] autocomplete",
-		"[!] shell command",
+		"[Tab] accept",
+		"[Ctrl+N/P] cycle",
+		"[Ctrl+Space] picker",
 		"[Ctrl+R] history",
 		"[Ctrl+L] clear",
 		"[Ctrl+C] quit",

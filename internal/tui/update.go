@@ -191,80 +191,31 @@ func (m Model) handleTypingMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.cmdOutput = ""
 		m.viewport.SetContent("")
 		m.commandInput.SetValue("")
-		m.suggestions = nil
+		m.commandInput.SetSuggestions([]string{"get", "describe", "logs", "apply", "delete", "exec", "create", "rollout", "scale"})
 		return m, nil
 
-	case "tab":
-		// Accept inline suggestion if available
-		if len(m.suggestions) > 0 {
-			currentInput := m.commandInput.Value()
-			trimmed := strings.TrimSpace(currentInput)
+	case "ctrl+space":
+		// Show resource/namespace picker if applicable
+		command := m.commandInput.Value()
+		trimmedCmd := strings.TrimSpace(command)
+		if trimmedCmd != "" && !strings.HasPrefix(trimmedCmd, "!") {
+			// Parse command to see what completions are needed
+			if m.parser != nil {
+				parsed := m.parser.Parse(trimmedCmd)
+				m.currentCmd = parsed
 
-			// Remove kubectl prefix if present
-			if strings.HasPrefix(trimmed, "kubectl ") {
-				trimmed = strings.TrimPrefix(trimmed, "kubectl ")
-			}
-
-			suggestion := m.suggestions[m.selectedSuggestion]
-
-			// Check if input has trailing space (means we're adding a new token)
-			hasTrailingSpace := len(currentInput) > 0 && currentInput[len(currentInput)-1] == ' '
-
-			if hasTrailingSpace {
-				// Append suggestion as new token
-				m.commandInput.SetValue(currentInput + suggestion + " ")
-			} else {
-				// Replace last token with suggestion
-				parts := strings.Fields(trimmed)
-				if len(parts) > 0 {
-					parts[len(parts)-1] = suggestion
-					newInput := strings.Join(parts, " ") + " "
-					m.commandInput.SetValue(newInput)
+				// Check if we need to show namespace picker
+				if strings.HasSuffix(command, "-n ") || strings.HasSuffix(command, "--namespace ") {
+					return m.showNamespacePicker()
 				}
-			}
 
-			m.suggestions = nil
-			m.selectedSuggestion = 0
-		} else {
-			// Show resource/namespace picker if applicable
-			command := m.commandInput.Value()
-			trimmedCmd := strings.TrimSpace(command)
-			if trimmedCmd != "" && !strings.HasPrefix(trimmedCmd, "!") {
-				// Parse command to see what completions are needed
-				if m.parser != nil {
-					parsed := m.parser.Parse(trimmedCmd)
-					m.currentCmd = parsed
-
-					// Check if we need to show namespace picker
-					if strings.HasSuffix(command, "-n ") || strings.HasSuffix(command, "--namespace ") {
-						return m.showNamespacePicker()
-					}
-
-					// Check if we need to show resource picker
-					if parsed.Resource != "" && parsed.ResourceName == "" {
-						return m.showResourcePicker(parsed.Resource, parsed.Namespace)
-					}
+				// Check if we need to show resource picker
+				if parsed.Resource != "" && parsed.ResourceName == "" {
+					return m.showResourcePicker(parsed.Resource, parsed.Namespace)
 				}
 			}
 		}
 		return m, nil
-
-	case "down":
-		// Cycle through suggestions
-		if len(m.suggestions) > 0 {
-			m.selectedSuggestion = (m.selectedSuggestion + 1) % len(m.suggestions)
-			return m, nil
-		}
-
-	case "up":
-		// Cycle through suggestions backwards
-		if len(m.suggestions) > 0 {
-			m.selectedSuggestion--
-			if m.selectedSuggestion < 0 {
-				m.selectedSuggestion = len(m.suggestions) - 1
-			}
-			return m, nil
-		}
 	}
 
 	var cmd tea.Cmd
@@ -272,15 +223,8 @@ func (m Model) handleTypingMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	cmds = append(cmds, cmd)
 
 	// Update autocomplete suggestions after every keystroke
-	m.suggestions = m.getAutocompleteSuggestions(m.commandInput.Value())
-	if len(m.suggestions) > 0 {
-		// Ensure selected index is in range
-		if m.selectedSuggestion >= len(m.suggestions) {
-			m.selectedSuggestion = 0
-		}
-	} else {
-		m.selectedSuggestion = 0
-	}
+	suggestions := m.getAutocompleteSuggestions(m.commandInput.Value())
+	m.commandInput.SetSuggestions(suggestions)
 
 	return m, tea.Batch(cmds...)
 }

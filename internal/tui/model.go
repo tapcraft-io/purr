@@ -49,26 +49,25 @@ type Model struct {
 	parser   *exec.Parser
 
 	// Flags
-	ready          bool
-	quitting       bool
-	err            error
-	statusMsg      string
-	ctrlCPressed   int       // Track consecutive Ctrl+C presses
-	ctrlCTime      time.Time // Track time of last Ctrl+C
-
-	// Autocomplete
-	suggestions    []string // Current autocomplete suggestions
-	selectedSuggestion int  // Selected suggestion index
+	ready        bool
+	quitting     bool
+	err          error
+	statusMsg    string
+	ctrlCPressed int       // Track consecutive Ctrl+C presses
+	ctrlCTime    time.Time // Track time of last Ctrl+C
 }
 
 // NewModel creates a new application model
 func NewModel(cache *k8s.ResourceCache, hist *history.History, ctx, kubeconfig string) Model {
-	// Initialize text input
+	// Initialize text input with suggestion support
 	ti := textinput.New()
 	ti.Placeholder = "get pods"
 	ti.Focus()
 	ti.CharLimit = 500
 	ti.Width = 80
+	ti.ShowSuggestions = true
+	// Set initial suggestions to common commands
+	ti.SetSuggestions([]string{"get", "describe", "logs", "apply", "delete", "exec", "create", "rollout", "scale"})
 
 	// Initialize spinner
 	s := spinner.New()
