@@ -44,9 +44,10 @@ type Model struct {
 	cmdError   error
 
 	// Services
-	history  *history.History
-	executor *exec.Executor
-	parser   *exec.Parser
+	history         *history.History
+	executor        *exec.Executor
+	parser          *exec.Parser
+	kubectlComplete *KubectlCompleter
 
 	// Flags
 	ready        bool
@@ -82,6 +83,9 @@ func NewModel(cache *k8s.ResourceCache, hist *history.History, ctx, kubeconfig s
 
 	parser := exec.NewParser()
 
+	// Initialize kubectl completer
+	kubectlComplete := NewKubectlCompleter()
+
 	// Initialize viewport
 	vp := viewport.New(80, 20)
 	vp.Style = viewportStyle
@@ -100,19 +104,20 @@ func NewModel(cache *k8s.ResourceCache, hist *history.History, ctx, kubeconfig s
 	hl.SetFilteringEnabled(true)
 
 	return Model{
-		commandInput: ti,
-		resourceList: rl,
-		viewport:     vp,
-		historyList:  hl,
-		spinner:      s,
-		mode:         types.ModeTyping,
-		cache:        cache,
-		history:      hist,
-		context:      ctx,
-		kubeconfig:   kubeconfig,
-		executor:     executor,
-		parser:       parser,
-		namespace:    "default",
+		commandInput:    ti,
+		resourceList:    rl,
+		viewport:        vp,
+		historyList:     hl,
+		spinner:         s,
+		mode:            types.ModeTyping,
+		cache:           cache,
+		history:         hist,
+		context:         ctx,
+		kubeconfig:      kubeconfig,
+		executor:        executor,
+		parser:          parser,
+		kubectlComplete: kubectlComplete,
+		namespace:       "default",
 	}
 }
 
@@ -222,6 +227,17 @@ func (m *Model) getAutocompleteSuggestions(input string) []string {
 	if len(parts) == 0 {
 		return []string{"get", "describe", "logs", "apply", "delete", "exec", "create", "rollout", "scale"}
 	}
+
+	// Try kubectl's native completion first
+	if m.kubectlComplete != nil {
+		kubectlSuggestions := m.kubectlComplete.GetFullSuggestions(trimmed)
+		if len(kubectlSuggestions) > 0 {
+			// Also check if we should add cache-based resource names
+			return m.enhanceWithCacheSuggestions(trimmed, kubectlSuggestions)
+		}
+	}
+
+	// Fallback to our heuristics if kubectl completion fails or is unavailable
 
 	// Determine if we're typing a partial token (no trailing space) or ready for next token
 	hasTrailingSpace := len(input) > 0 && (input[len(input)-1] == ' ')
@@ -587,4 +603,66 @@ func (m *Model) getResourceTypeArgIndex(heuristic CommandHeuristic) int {
 		}
 	}
 	return -1
+}
+
+// enhanceWithCacheSuggestions enhances kubectl's suggestions with actual resource names from cache
+func (m *Model) enhanceWithCacheSuggestions(input string, kubectlSuggestions []string) []string {
+	// If kubectl suggested resource types, also suggest actual resource names
+	parts := strings.Fields(input)
+	if len(parts) < 2 {
+		return kubectlSuggestions
+	}
+
+	// Check if we just completed a resource type (e.g., "get pods ")
+	hasTrailingSpace := len(input) > 0 && input[len(input)-1] == ' '
+	if !hasTrailingSpace {
+		return kubectlSuggestions
+	}
+
+	lastToken := parts[len(parts)-1]
+
+	// Check if last token looks like a resource type
+	isResourceType := false
+	for _, rt := range ResourceTypeCompletions {
+		if rt == lastToken || strings.HasPrefix(rt, lastToken) {
+			isResourceType = true
+			break
+		}
+	}
+
+	if !isResourceType {
+		return kubectlSuggestions
+	}
+
+	// Try to get resource names from cache
+	if m.cache != nil && m.cache.IsReady() {
+		// Determine namespace to use
+		namespace := m.namespace
+		for i := 0; i < len(parts)-1; i++ {
+			if (parts[i] == "-n" || parts[i] == "--namespace") && i+1 < len(parts) {
+				namespace = parts[i+1]
+				break
+			}
+		}
+
+		items := m.cache.GetResourceByType(lastToken, namespace)
+		if len(items) > 0 {
+			// Add actual resource names before kubectl's suggestions
+			enhanced := make([]string, 0, len(items)+len(kubectlSuggestions))
+			prefix := input + " "
+
+			for i, item := range items {
+				enhanced = append(enhanced, prefix+item.Title)
+				if i >= 9 { // Limit to 10 resource names
+					break
+				}
+			}
+
+			// Add kubectl's suggestions (flags, etc.) after
+			enhanced = append(enhanced, kubectlSuggestions...)
+			return enhanced
+		}
+	}
+
+	return kubectlSuggestions
 }

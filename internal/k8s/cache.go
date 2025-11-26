@@ -3,6 +3,7 @@ package k8s
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -290,6 +291,97 @@ func (rc *ResourceCache) GetNodes() []corev1.Node {
 	return result
 }
 
+// GetStatefulSets returns statefulsets in a namespace
+func (rc *ResourceCache) GetStatefulSets(namespace string) []appsv1.StatefulSet {
+	rc.mu.RLock()
+	defer rc.mu.RUnlock()
+
+	if sts, ok := rc.statefulsets[namespace]; ok {
+		result := make([]appsv1.StatefulSet, len(sts))
+		copy(result, sts)
+		return result
+	}
+	return []appsv1.StatefulSet{}
+}
+
+// GetDaemonSets returns daemonsets in a namespace
+func (rc *ResourceCache) GetDaemonSets(namespace string) []appsv1.DaemonSet {
+	rc.mu.RLock()
+	defer rc.mu.RUnlock()
+
+	if ds, ok := rc.daemonsets[namespace]; ok {
+		result := make([]appsv1.DaemonSet, len(ds))
+		copy(result, ds)
+		return result
+	}
+	return []appsv1.DaemonSet{}
+}
+
+// GetJobs returns jobs in a namespace
+func (rc *ResourceCache) GetJobs(namespace string) []batchv1.Job {
+	rc.mu.RLock()
+	defer rc.mu.RUnlock()
+
+	if jobs, ok := rc.jobs[namespace]; ok {
+		result := make([]batchv1.Job, len(jobs))
+		copy(result, jobs)
+		return result
+	}
+	return []batchv1.Job{}
+}
+
+// GetCronJobs returns cronjobs in a namespace
+func (rc *ResourceCache) GetCronJobs(namespace string) []batchv1.CronJob {
+	rc.mu.RLock()
+	defer rc.mu.RUnlock()
+
+	if cj, ok := rc.cronjobs[namespace]; ok {
+		result := make([]batchv1.CronJob, len(cj))
+		copy(result, cj)
+		return result
+	}
+	return []batchv1.CronJob{}
+}
+
+// GetConfigMaps returns configmaps in a namespace
+func (rc *ResourceCache) GetConfigMaps(namespace string) []corev1.ConfigMap {
+	rc.mu.RLock()
+	defer rc.mu.RUnlock()
+
+	if cm, ok := rc.configmaps[namespace]; ok {
+		result := make([]corev1.ConfigMap, len(cm))
+		copy(result, cm)
+		return result
+	}
+	return []corev1.ConfigMap{}
+}
+
+// GetSecrets returns secrets in a namespace
+func (rc *ResourceCache) GetSecrets(namespace string) []corev1.Secret {
+	rc.mu.RLock()
+	defer rc.mu.RUnlock()
+
+	if secrets, ok := rc.secrets[namespace]; ok {
+		result := make([]corev1.Secret, len(secrets))
+		copy(result, secrets)
+		return result
+	}
+	return []corev1.Secret{}
+}
+
+// GetIngresses returns ingresses in a namespace
+func (rc *ResourceCache) GetIngresses(namespace string) []networkingv1.Ingress {
+	rc.mu.RLock()
+	defer rc.mu.RUnlock()
+
+	if ing, ok := rc.ingresses[namespace]; ok {
+		result := make([]networkingv1.Ingress, len(ing))
+		copy(result, ing)
+		return result
+	}
+	return []networkingv1.Ingress{}
+}
+
 // GetResourceByType returns resources of a specific type
 func (rc *ResourceCache) GetResourceByType(resourceType, namespace string) []types.ListItem {
 	switch resourceType {
@@ -303,6 +395,20 @@ func (rc *ResourceCache) GetResourceByType(resourceType, namespace string) []typ
 		return rc.NodesToListItems(rc.GetNodes())
 	case "namespaces", "namespace", "ns":
 		return rc.NamespacesToListItems()
+	case "statefulsets", "statefulset", "sts":
+		return rc.StatefulSetsToListItems(rc.GetStatefulSets(namespace))
+	case "daemonsets", "daemonset", "ds":
+		return rc.DaemonSetsToListItems(rc.GetDaemonSets(namespace))
+	case "jobs", "job":
+		return rc.JobsToListItems(rc.GetJobs(namespace))
+	case "cronjobs", "cronjob", "cj":
+		return rc.CronJobsToListItems(rc.GetCronJobs(namespace))
+	case "configmaps", "configmap", "cm":
+		return rc.ConfigMapsToListItems(rc.GetConfigMaps(namespace))
+	case "secrets", "secret":
+		return rc.SecretsToListItems(rc.GetSecrets(namespace))
+	case "ingresses", "ingress", "ing":
+		return rc.IngressesToListItems(rc.GetIngresses(namespace))
 	default:
 		return []types.ListItem{}
 	}
@@ -409,6 +515,153 @@ func (rc *ResourceCache) NamespacesToListItems() []types.ListItem {
 			Metadata: map[string]string{
 				"status": status,
 				"age":    age,
+			},
+		}
+	}
+	return items
+}
+
+// StatefulSetsToListItems converts statefulsets to list items
+func (rc *ResourceCache) StatefulSetsToListItems(sts []appsv1.StatefulSet) []types.ListItem {
+	items := make([]types.ListItem, len(sts))
+	for i, s := range sts {
+		ready := fmt.Sprintf("%d/%d", s.Status.ReadyReplicas, *s.Spec.Replicas)
+		age := time.Since(s.CreationTimestamp.Time).Round(time.Second).String()
+
+		items[i] = types.ListItem{
+			Title:       s.Name,
+			Description: fmt.Sprintf("Ready: %s | Age: %s | NS: %s", ready, age, s.Namespace),
+			Metadata: map[string]string{
+				"namespace": s.Namespace,
+				"ready":     ready,
+				"age":       age,
+			},
+		}
+	}
+	return items
+}
+
+// DaemonSetsToListItems converts daemonsets to list items
+func (rc *ResourceCache) DaemonSetsToListItems(ds []appsv1.DaemonSet) []types.ListItem {
+	items := make([]types.ListItem, len(ds))
+	for i, d := range ds {
+		ready := fmt.Sprintf("%d/%d", d.Status.NumberReady, d.Status.DesiredNumberScheduled)
+		age := time.Since(d.CreationTimestamp.Time).Round(time.Second).String()
+
+		items[i] = types.ListItem{
+			Title:       d.Name,
+			Description: fmt.Sprintf("Ready: %s | Age: %s | NS: %s", ready, age, d.Namespace),
+			Metadata: map[string]string{
+				"namespace": d.Namespace,
+				"ready":     ready,
+				"age":       age,
+			},
+		}
+	}
+	return items
+}
+
+// JobsToListItems converts jobs to list items
+func (rc *ResourceCache) JobsToListItems(jobs []batchv1.Job) []types.ListItem {
+	items := make([]types.ListItem, len(jobs))
+	for i, j := range jobs {
+		status := fmt.Sprintf("%d/%d", j.Status.Succeeded, *j.Spec.Completions)
+		age := time.Since(j.CreationTimestamp.Time).Round(time.Second).String()
+
+		items[i] = types.ListItem{
+			Title:       j.Name,
+			Description: fmt.Sprintf("Succeeded: %s | Age: %s | NS: %s", status, age, j.Namespace),
+			Metadata: map[string]string{
+				"namespace": j.Namespace,
+				"status":    status,
+				"age":       age,
+			},
+		}
+	}
+	return items
+}
+
+// CronJobsToListItems converts cronjobs to list items
+func (rc *ResourceCache) CronJobsToListItems(cj []batchv1.CronJob) []types.ListItem {
+	items := make([]types.ListItem, len(cj))
+	for i, c := range cj {
+		schedule := c.Spec.Schedule
+		age := time.Since(c.CreationTimestamp.Time).Round(time.Second).String()
+
+		items[i] = types.ListItem{
+			Title:       c.Name,
+			Description: fmt.Sprintf("Schedule: %s | Age: %s | NS: %s", schedule, age, c.Namespace),
+			Metadata: map[string]string{
+				"namespace": c.Namespace,
+				"schedule":  schedule,
+				"age":       age,
+			},
+		}
+	}
+	return items
+}
+
+// ConfigMapsToListItems converts configmaps to list items
+func (rc *ResourceCache) ConfigMapsToListItems(cm []corev1.ConfigMap) []types.ListItem {
+	items := make([]types.ListItem, len(cm))
+	for i, c := range cm {
+		dataCount := fmt.Sprintf("%d keys", len(c.Data))
+		age := time.Since(c.CreationTimestamp.Time).Round(time.Second).String()
+
+		items[i] = types.ListItem{
+			Title:       c.Name,
+			Description: fmt.Sprintf("Data: %s | Age: %s | NS: %s", dataCount, age, c.Namespace),
+			Metadata: map[string]string{
+				"namespace": c.Namespace,
+				"dataCount": dataCount,
+				"age":       age,
+			},
+		}
+	}
+	return items
+}
+
+// SecretsToListItems converts secrets to list items
+func (rc *ResourceCache) SecretsToListItems(secrets []corev1.Secret) []types.ListItem {
+	items := make([]types.ListItem, len(secrets))
+	for i, s := range secrets {
+		dataCount := fmt.Sprintf("%d keys", len(s.Data))
+		age := time.Since(s.CreationTimestamp.Time).Round(time.Second).String()
+
+		items[i] = types.ListItem{
+			Title:       s.Name,
+			Description: fmt.Sprintf("Type: %s | Data: %s | Age: %s | NS: %s", s.Type, dataCount, age, s.Namespace),
+			Metadata: map[string]string{
+				"namespace": s.Namespace,
+				"type":      string(s.Type),
+				"dataCount": dataCount,
+				"age":       age,
+			},
+		}
+	}
+	return items
+}
+
+// IngressesToListItems converts ingresses to list items
+func (rc *ResourceCache) IngressesToListItems(ing []networkingv1.Ingress) []types.ListItem {
+	items := make([]types.ListItem, len(ing))
+	for i, ingress := range ing {
+		var hosts []string
+		for _, rule := range ingress.Spec.Rules {
+			if rule.Host != "" {
+				hosts = append(hosts, rule.Host)
+			}
+		}
+		hostsStr := strings.Join(hosts, ",")
+		age := time.Since(ingress.CreationTimestamp.Time).Round(time.Second).String()
+
+		items[i] = types.ListItem{
+			Title:       ingress.Name,
+			Description: fmt.Sprintf("Hosts: %s | Age: %s | NS: %s", hostsStr, age, ingress.Namespace),
+			Metadata: map[string]string{
+				"namespace": ingress.Namespace,
+				"hosts":     hostsStr,
+				"age":       age,
 			},
 		}
 	}
