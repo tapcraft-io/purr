@@ -3,6 +3,7 @@
 #
 # Binaries for programs and plugins
 bin/
+purr
 *.exe
 *.exe~
 *.dll
