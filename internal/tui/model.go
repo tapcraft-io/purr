@@ -2,6 +2,8 @@ package tui
 
 import (
 	"context"
+	"fmt"
+	"time"
 
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/spinner"
@@ -113,6 +115,7 @@ func (m Model) Init() tea.Cmd {
 	return tea.Batch(
 		textinput.Blink,
 		spinner.Tick,
+		checkCacheReady(m.cache),
 	)
 }
 
@@ -129,12 +132,23 @@ type (
 // checkCacheReady checks if the cache is ready
 func checkCacheReady(cache *k8s.ResourceCache) tea.Cmd {
 	return func() tea.Msg {
-		// Wait for cache to be ready
-		for !cache.IsReady() {
-			// In a real implementation, we'd use a proper wait mechanism
-			continue
+		// Poll for cache readiness with a small delay
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+
+		timeout := time.After(30 * time.Second)
+
+		for {
+			select {
+			case <-timeout:
+				// Timeout after 30 seconds
+				return errMsg{err: fmt.Errorf("cache initialization timeout")}
+			case <-ticker.C:
+				if cache.IsReady() {
+					return cacheReadyMsg{}
+				}
+			}
 		}
-		return cacheReadyMsg{}
 	}
 }
 

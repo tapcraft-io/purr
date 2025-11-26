@@ -40,16 +40,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cmdError = msg.result.Error
 			m.cmdOutput += "\n" + msg.result.Stderr
 			m.mode = types.ModeViewingOutput
-			m.history.Add(msg.cmd, false, m.context, m.namespace)
+			if m.history != nil {
+				m.history.Add(msg.cmd, false, m.context, m.namespace)
+			}
 		} else {
 			m.cmdError = nil
 			m.mode = types.ModeViewingOutput
-			m.history.Add(msg.cmd, true, m.context, m.namespace)
+			if m.history != nil {
+				m.history.Add(msg.cmd, true, m.context, m.namespace)
+			}
 		}
 		m.viewport.SetContent(m.cmdOutput)
 		m.viewport.GotoTop()
 		// Save history after command execution
-		_ = m.history.Save()
+		if m.history != nil {
+			_ = m.history.Save()
+		}
 
 	case errMsg:
 		m.err = msg.err
@@ -158,10 +164,12 @@ func (m Model) handleTypingMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "ctrl+r":
 		// Open history
-		m.mode = types.ModeViewingHistory
-		entries := m.history.GetAll()
-		items := convertToListItems(m.history.ToListItems(entries))
-		m.historyList.SetItems(items)
+		if m.history != nil {
+			m.mode = types.ModeViewingHistory
+			entries := m.history.GetAll()
+			items := convertToListItems(m.history.ToListItems(entries))
+			m.historyList.SetItems(items)
+		}
 		return m, nil
 
 	case "ctrl+l":
