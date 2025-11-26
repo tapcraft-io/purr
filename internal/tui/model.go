@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/list"
@@ -48,10 +49,16 @@ type Model struct {
 	parser   *exec.Parser
 
 	// Flags
-	ready     bool
-	quitting  bool
-	err       error
-	statusMsg string
+	ready          bool
+	quitting       bool
+	err            error
+	statusMsg      string
+	ctrlCPressed   int       // Track consecutive Ctrl+C presses
+	ctrlCTime      time.Time // Track time of last Ctrl+C
+
+	// Autocomplete
+	suggestions    []string // Current autocomplete suggestions
+	selectedSuggestion int  // Selected suggestion index
 }
 
 // NewModel creates a new application model
@@ -187,4 +194,85 @@ func convertToListItems(items []types.ListItem) []list.Item {
 		result[i] = listItem{item: item}
 	}
 	return result
+}
+
+// getAutocompleteSuggestions generates autocomplete suggestions based on current input
+func (m *Model) getAutocompleteSuggestions(input string) []string {
+	trimmed := strings.TrimSpace(input)
+
+	// Don't suggest for shell commands
+	if strings.HasPrefix(trimmed, "!") {
+		return nil
+	}
+
+	// Remove kubectl prefix if present
+	if strings.HasPrefix(trimmed, "kubectl ") {
+		trimmed = strings.TrimPrefix(trimmed, "kubectl ")
+	}
+
+	// If input is empty or just whitespace, suggest common commands
+	if trimmed == "" {
+		return []string{"get", "describe", "logs", "apply", "delete", "exec", "create"}
+	}
+
+	parts := strings.Fields(trimmed)
+
+	// If we only have one part (the command), suggest matching commands
+	if len(parts) == 1 {
+		prefix := parts[0]
+		var suggestions []string
+
+		for cmd := range KubectlHeuristics {
+			if strings.HasPrefix(cmd, prefix) {
+				suggestions = append(suggestions, cmd)
+			}
+		}
+
+		return suggestions
+	}
+
+	// For multi-part commands, suggest based on heuristics
+	cmd := parts[0]
+	heuristic, ok := GetCommandHeuristic(cmd)
+	if !ok {
+		return nil
+	}
+
+	// Check if we're completing a flag
+	lastPart := parts[len(parts)-1]
+	if strings.HasPrefix(lastPart, "-") {
+		var suggestions []string
+		for _, flag := range heuristic.Flags {
+			longFlag := "--" + flag.Name
+			shortFlag := ""
+			if flag.Shorthand != "" {
+				shortFlag = "-" + flag.Shorthand
+			}
+
+			if strings.HasPrefix(longFlag, lastPart) {
+				suggestions = append(suggestions, longFlag)
+			} else if shortFlag != "" && strings.HasPrefix(shortFlag, lastPart) {
+				suggestions = append(suggestions, shortFlag)
+			}
+		}
+		return suggestions
+	}
+
+	// Check if we're completing a resource type
+	if len(parts) == 1 || (len(parts) == 2 && !strings.HasPrefix(parts[1], "-")) {
+		var suggestions []string
+		searchTerm := ""
+		if len(parts) == 2 {
+			searchTerm = parts[1]
+		}
+
+		for _, resource := range ResourceTypeCompletions {
+			if strings.HasPrefix(resource, searchTerm) {
+				suggestions = append(suggestions, resource)
+			}
+		}
+		return suggestions
+	}
+
+	return nil
 }

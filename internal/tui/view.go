@@ -92,10 +92,56 @@ func (m Model) renderTypingMode() string {
 	b.WriteString(title)
 	b.WriteString("\n\n")
 
-	// Command input
+	// Command input with inline suggestion
 	b.WriteString(RenderPrompt())
-	b.WriteString(m.commandInput.View())
-	b.WriteString("\n\n")
+	inputView := m.commandInput.View()
+	b.WriteString(inputView)
+
+	// Show inline autocomplete suggestion if available
+	if len(m.suggestions) > 0 {
+		suggestion := m.suggestions[m.selectedSuggestion]
+		currentInput := m.commandInput.Value()
+		trimmed := strings.TrimSpace(currentInput)
+
+		// Remove kubectl prefix if present for matching
+		if strings.HasPrefix(trimmed, "kubectl ") {
+			trimmed = strings.TrimPrefix(trimmed, "kubectl ")
+		}
+
+		parts := strings.Fields(trimmed)
+		if len(parts) > 0 {
+			lastPart := parts[len(parts)-1]
+			// Only show suggestion if it starts with what user typed
+			if strings.HasPrefix(suggestion, lastPart) {
+				remainder := strings.TrimPrefix(suggestion, lastPart)
+				b.WriteString(dimStyle.Render(remainder))
+			}
+		}
+	}
+
+	b.WriteString("\n")
+
+	// Show available suggestions
+	if len(m.suggestions) > 1 {
+		b.WriteString(dimStyle.Render("  Suggestions: "))
+		for i, sug := range m.suggestions {
+			if i > 5 {
+				// Limit to 6 suggestions
+				b.WriteString(dimStyle.Render("..."))
+				break
+			}
+			if i == m.selectedSuggestion {
+				b.WriteString(highlightStyle.Render(sug))
+			} else {
+				b.WriteString(dimStyle.Render(sug))
+			}
+			if i < len(m.suggestions)-1 && i < 5 {
+				b.WriteString(dimStyle.Render(", "))
+			}
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString("\n")
 
 	// Show status message if present
 	if m.statusMsg != "" {
