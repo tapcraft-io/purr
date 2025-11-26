@@ -17,13 +17,22 @@ func NewParser() *Parser {
 // Parse parses a kubectl command string
 func (p *Parser) Parse(command string) *types.ParsedCommand {
 	cmd := &types.ParsedCommand{
-		Raw:       command,
-		Flags:     make(map[string]string),
-		BoolFlags: make(map[string]bool),
-		Files:     make([]string, 0),
-		IsValid:   true,
-		Errors:    make([]string, 0),
+		Raw:        command,
+		Flags:      make(map[string]string),
+		BoolFlags:  make(map[string]bool),
+		Files:      make([]string, 0),
+		IsValid:    true,
+		Errors:     make([]string, 0),
 		NeedsInput: make([]types.CompletionNeeded, 0),
+	}
+
+	command = strings.TrimSpace(command)
+
+	// Shell commands (prefixed with !) are not kubectl commands
+	if strings.HasPrefix(command, "!") {
+		cmd.IsValid = false
+		cmd.Errors = append(cmd.Errors, "shell command")
+		return cmd
 	}
 
 	// Remove "kubectl" prefix if present
@@ -236,22 +245,22 @@ func isRequiredFlag(verb, flag string) bool {
 // normalizeResourceType normalizes a resource type alias to its full form
 func normalizeResourceType(resource string) string {
 	aliases := map[string]string{
-		"po":      "pods",
-		"svc":     "services",
-		"deploy":  "deployments",
-		"rs":      "replicasets",
-		"rc":      "replicationcontrollers",
-		"ds":      "daemonsets",
-		"sts":     "statefulsets",
-		"cm":      "configmaps",
-		"secret":  "secrets",
-		"ing":     "ingresses",
-		"ns":      "namespaces",
-		"no":      "nodes",
-		"pv":      "persistentvolumes",
-		"pvc":     "persistentvolumeclaims",
-		"sa":      "serviceaccounts",
-		"cj":      "cronjobs",
+		"po":     "pods",
+		"svc":    "services",
+		"deploy": "deployments",
+		"rs":     "replicasets",
+		"rc":     "replicationcontrollers",
+		"ds":     "daemonsets",
+		"sts":    "statefulsets",
+		"cm":     "configmaps",
+		"secret": "secrets",
+		"ing":    "ingresses",
+		"ns":     "namespaces",
+		"no":     "nodes",
+		"pv":     "persistentvolumes",
+		"pvc":    "persistentvolumeclaims",
+		"sa":     "serviceaccounts",
+		"cj":     "cronjobs",
 	}
 
 	if full, ok := aliases[resource]; ok {
