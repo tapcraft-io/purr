@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -137,22 +138,17 @@ func (m Model) handleTypingMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.String() {
 	case "enter":
-		// Execute command
-		command := m.commandInput.Value()
-		if command == "" {
+		command, isShell, err := m.prepareCommand(m.commandInput.Value())
+		if err != nil {
+			m.statusMsg = err.Error()
 			return m, nil
-		}
-
-		// Ensure it starts with kubectl
-		if !strings.HasPrefix(command, "kubectl ") {
-			command = "kubectl " + command
 		}
 
 		m.lastCmd = command
 		m.statusMsg = "Executing command..."
 
 		// Check if destructive
-		if m.parser != nil && exec.IsDestructive(command) {
+		if !isShell && m.parser != nil && exec.IsDestructive(command) {
 			m.mode = types.ModeConfirming
 			return m, nil
 		}
@@ -182,13 +178,14 @@ func (m Model) handleTypingMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "tab":
 		// Trigger autocomplete
 		command := m.commandInput.Value()
-		if command == "" {
+		trimmedCmd := strings.TrimSpace(command)
+		if trimmedCmd == "" || strings.HasPrefix(trimmedCmd, "!") {
 			return m, nil
 		}
 
 		// Parse command to see what completions are needed
 		if m.parser != nil {
-			parsed := m.parser.Parse(command)
+			parsed := m.parser.Parse(trimmedCmd)
 			m.currentCmd = parsed
 
 			// Check if we need to show namespace picker
@@ -249,12 +246,10 @@ func (m Model) handleViewingHistoryMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.mode = types.ModeTyping
 			m.commandInput.Focus()
 
-			// Optionally execute immediately
-			if strings.HasPrefix(command, "kubectl ") {
-				m.lastCmd = command
-				if m.executor != nil {
-					return m, executeCommand(m.executor, command)
-				}
+			preparedCmd, _, err := m.prepareCommand(command)
+			if err == nil && m.executor != nil {
+				m.lastCmd = preparedCmd
+				return m, executeCommand(m.executor, preparedCmd)
 			}
 		}
 		return m, nil
@@ -317,6 +312,30 @@ func (m Model) handleViewingOutputMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+// prepareCommand normalizes user input into an executable command string and
+// reports whether it should be run as a shell command.
+func (m Model) prepareCommand(raw string) (string, bool, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", false, fmt.Errorf("please enter a command")
+	}
+
+	if strings.HasPrefix(trimmed, "!") {
+		shell := strings.TrimSpace(strings.TrimPrefix(trimmed, "!"))
+		if shell == "" {
+			return "", true, fmt.Errorf("shell command cannot be empty")
+		}
+
+		return "!" + shell, true, nil
+	}
+
+	if strings.HasPrefix(trimmed, "kubectl") {
+		return trimmed, false, nil
+	}
+
+	return "kubectl " + trimmed, false, nil
+}
+
 // showNamespacePicker shows the namespace picker
 func (m Model) showNamespacePicker() (tea.Model, tea.Cmd) {
 	if m.cache == nil || !m.cache.IsReady() {
@@ -361,12 +380,12 @@ func (m Model) showResourcePicker(resourceType, namespace string) (tea.Model, te
 
 // KeyMap defines the keybindings
 type KeyMap struct {
-	Quit   key.Binding
-	Enter  key.Binding
-	Back   key.Binding
-	Tab    key.Binding
+	Quit    key.Binding
+	Enter   key.Binding
+	Back    key.Binding
+	Tab     key.Binding
 	History key.Binding
-	Clear  key.Binding
+	Clear   key.Binding
 }
 
 // DefaultKeyMap returns the default keybindings

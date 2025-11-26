@@ -48,17 +48,17 @@ type Model struct {
 	parser   *exec.Parser
 
 	// Flags
-	ready      bool
-	quitting   bool
-	err        error
-	statusMsg  string
+	ready     bool
+	quitting  bool
+	err       error
+	statusMsg string
 }
 
 // NewModel creates a new application model
 func NewModel(cache *k8s.ResourceCache, hist *history.History, ctx, kubeconfig string) Model {
 	// Initialize text input
 	ti := textinput.New()
-	ti.Placeholder = "kubectl get pods"
+	ti.Placeholder = "get pods"
 	ti.Focus()
 	ti.CharLimit = 500
 	ti.Width = 80
@@ -121,8 +121,8 @@ func (m Model) Init() tea.Cmd {
 
 // Messages for async operations
 type (
-	cacheReadyMsg      struct{}
-	commandResultMsg   struct {
+	cacheReadyMsg    struct{}
+	commandResultMsg struct {
 		result *exec.ExecuteResult
 		cmd    string
 	}
@@ -152,7 +152,7 @@ func checkCacheReady(cache *k8s.ResourceCache) tea.Cmd {
 	}
 }
 
-// executeCommand executes a kubectl command asynchronously
+// executeCommand executes a command asynchronously
 func executeCommand(executor *exec.Executor, command string) tea.Cmd {
 	return func() tea.Msg {
 		result := executor.ExecuteString(context.Background(), command)

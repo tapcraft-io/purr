@@ -220,6 +220,7 @@ func (m Model) renderConfirmingMode() string {
 func (m Model) renderHelpBar() string {
 	items := []string{
 		"[Tab] autocomplete",
+		"[!] shell command",
 		"[Ctrl+R] history",
 		"[Ctrl+L] clear",
 		"[Ctrl+C] quit",

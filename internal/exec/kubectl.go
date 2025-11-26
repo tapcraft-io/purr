@@ -66,11 +66,52 @@ func (e *Executor) Execute(ctx context.Context, args []string) *ExecuteResult {
 	return result
 }
 
-// ExecuteString runs a kubectl command from a string
+// ExecuteString runs a command from a string. Commands starting with "!" are
+// executed directly in the shell, all others are treated as kubectl commands.
 func (e *Executor) ExecuteString(ctx context.Context, command string) *ExecuteResult {
+	trimmed := strings.TrimSpace(command)
+
+	if strings.HasPrefix(trimmed, "!") {
+		shellCmd := strings.TrimSpace(strings.TrimPrefix(trimmed, "!"))
+		if shellCmd == "" {
+			return &ExecuteResult{Error: fmt.Errorf("empty shell command"), ExitCode: 1}
+		}
+		return e.executeShell(ctx, shellCmd)
+	}
+
 	// Parse command string into args
-	args := parseCommandString(command)
+	args := parseCommandString(trimmed)
 	return e.Execute(ctx, args)
+}
+
+// executeShell runs a command directly in the shell
+func (e *Executor) executeShell(ctx context.Context, command string) *ExecuteResult {
+	start := time.Now()
+	result := &ExecuteResult{}
+
+	cmd := exec.CommandContext(ctx, "sh", "-c", command)
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	result.Duration = time.Since(start)
+	result.Stdout = stdout.String()
+	result.Stderr = stderr.String()
+
+	if err != nil {
+		result.Error = err
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			result.ExitCode = exitErr.ExitCode()
+		} else {
+			result.ExitCode = -1
+		}
+	} else {
+		result.ExitCode = 0
+	}
+
+	return result
 }
 
 // parseCommandString splits a command string into arguments
@@ -91,7 +132,13 @@ func parseCommandString(command string) []string {
 
 // IsDestructive checks if a command is destructive (requires confirmation)
 func IsDestructive(command string) bool {
-	args := strings.Fields(command)
+	trimmed := strings.TrimSpace(command)
+
+	if strings.HasPrefix(trimmed, "!") {
+		return false
+	}
+
+	args := strings.Fields(trimmed)
 	if len(args) == 0 {
 		return false
 	}
@@ -123,8 +170,13 @@ func IsDestructive(command string) bool {
 
 // GetCommandVerb extracts the kubectl verb from a command string
 func GetCommandVerb(command string) string {
-	command = strings.TrimPrefix(command, "kubectl ")
 	command = strings.TrimSpace(command)
+
+	if strings.HasPrefix(command, "!") {
+		return ""
+	}
+
+	command = strings.TrimPrefix(command, "kubectl ")
 
 	args := strings.Fields(command)
 	if len(args) == 0 {
