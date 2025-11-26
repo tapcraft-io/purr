@@ -212,67 +212,231 @@ func (m *Model) getAutocompleteSuggestions(input string) []string {
 
 	// If input is empty or just whitespace, suggest common commands
 	if trimmed == "" {
-		return []string{"get", "describe", "logs", "apply", "delete", "exec", "create"}
+		return []string{"get", "describe", "logs", "apply", "delete", "exec", "create", "rollout", "scale"}
 	}
 
 	parts := strings.Fields(trimmed)
-
-	// If we only have one part (the command), suggest matching commands
-	if len(parts) == 1 {
-		prefix := parts[0]
-		var suggestions []string
-
-		for cmd := range KubectlHeuristics {
-			if strings.HasPrefix(cmd, prefix) {
-				suggestions = append(suggestions, cmd)
-			}
-		}
-
-		return suggestions
+	if len(parts) == 0 {
+		return []string{"get", "describe", "logs", "apply", "delete", "exec", "create", "rollout", "scale"}
 	}
 
-	// For multi-part commands, suggest based on heuristics
+	// Determine if we're typing a partial token (no trailing space) or ready for next token
+	hasTrailingSpace := len(input) > 0 && input[len(input)-1] == ' '
+	lastToken := parts[len(parts)-1]
+
+	// CASE 1: Typing/completing a command
+	if len(parts) == 1 && !hasTrailingSpace {
+		return m.suggestCommands(lastToken)
+	}
+
+	// CASE 2: Command complete, need next token
+	if len(parts) == 1 && hasTrailingSpace {
+		heuristic, ok := GetCommandHeuristic(parts[0])
+		if !ok {
+			return nil
+		}
+
+		// Check if command has subcommands (like rollout, config, etc.)
+		if len(heuristic.RequiredArgs) > 0 && heuristic.RequiredArgs[0].Type == ArgTypeString {
+			// Return subcommands from description
+			return m.extractSubcommands(heuristic.RequiredArgs[0].Description)
+		}
+
+		// Otherwise suggest resource types
+		return ResourceTypeCompletions
+	}
+
+	// CASE 3: Multi-part command - need to determine context
 	cmd := parts[0]
 	heuristic, ok := GetCommandHeuristic(cmd)
 	if !ok {
 		return nil
 	}
 
-	// Check if we're completing a flag
-	lastPart := parts[len(parts)-1]
-	if strings.HasPrefix(lastPart, "-") {
-		var suggestions []string
-		for _, flag := range heuristic.Flags {
-			longFlag := "--" + flag.Name
-			shortFlag := ""
-			if flag.Shorthand != "" {
-				shortFlag = "-" + flag.Shorthand
-			}
-
-			if strings.HasPrefix(longFlag, lastPart) {
-				suggestions = append(suggestions, longFlag)
-			} else if shortFlag != "" && strings.HasPrefix(shortFlag, lastPart) {
-				suggestions = append(suggestions, shortFlag)
-			}
+	// Check if we're completing a subcommand
+	if len(heuristic.RequiredArgs) > 0 && heuristic.RequiredArgs[0].Type == ArgTypeString {
+		if len(parts) == 2 && !hasTrailingSpace {
+			// Typing subcommand
+			return m.filterSubcommands(m.extractSubcommands(heuristic.RequiredArgs[0].Description), lastToken)
 		}
-		return suggestions
+		if len(parts) == 2 && hasTrailingSpace {
+			// Subcommand complete, suggest resource types
+			return ResourceTypeCompletions
+		}
+		if len(parts) == 3 && !hasTrailingSpace {
+			// Typing resource type after subcommand
+			return m.filterResourceTypes(lastToken)
+		}
+	}
+
+	// Check if last token is a flag
+	if strings.HasPrefix(lastToken, "-") && !hasTrailingSpace {
+		return m.suggestFlags(heuristic, lastToken)
+	}
+
+	// Check if previous token was a flag that needs a value
+	if len(parts) >= 2 && strings.HasPrefix(parts[len(parts)-2], "-") {
+		flagName := strings.TrimLeft(parts[len(parts)-2], "-")
+		return m.suggestFlagValue(heuristic, flagName, lastToken, hasTrailingSpace)
 	}
 
 	// Check if we're completing a resource type
-	if len(parts) == 1 || (len(parts) == 2 && !strings.HasPrefix(parts[1], "-")) {
-		var suggestions []string
-		searchTerm := ""
-		if len(parts) == 2 {
-			searchTerm = parts[1]
-		}
+	resourceArgIndex := m.getResourceTypeArgIndex(heuristic)
+	if resourceArgIndex >= 0 && len(parts) == resourceArgIndex+2 && !hasTrailingSpace {
+		// +2 because: cmd is index 0, resource type is at resourceArgIndex+1 in parts
+		return m.filterResourceTypes(lastToken)
+	}
 
-		for _, resource := range ResourceTypeCompletions {
-			if strings.HasPrefix(resource, searchTerm) {
-				suggestions = append(suggestions, resource)
-			}
-		}
-		return suggestions
+	// If resource type complete, suggest flags
+	if resourceArgIndex >= 0 && len(parts) == resourceArgIndex+2 && hasTrailingSpace {
+		return m.suggestCommonFlags(heuristic)
+	}
+
+	// If we have command + resource, suggest flags or resource names
+	if len(parts) >= 2 && hasTrailingSpace {
+		return m.suggestCommonFlags(heuristic)
 	}
 
 	return nil
+}
+
+// suggestCommands suggests commands matching the prefix
+func (m *Model) suggestCommands(prefix string) []string {
+	var suggestions []string
+	for cmd := range KubectlHeuristics {
+		if strings.HasPrefix(cmd, prefix) {
+			suggestions = append(suggestions, cmd)
+		}
+	}
+	return suggestions
+}
+
+// extractSubcommands extracts subcommands from description field
+func (m *Model) extractSubcommands(description string) []string {
+	// Look for patterns like "status|history|pause|resume|restart|undo"
+	if strings.Contains(description, "|") {
+		return strings.Split(description, "|")
+	}
+	return nil
+}
+
+// filterSubcommands filters subcommands by prefix
+func (m *Model) filterSubcommands(subcommands []string, prefix string) []string {
+	if len(subcommands) == 0 {
+		return nil
+	}
+	var filtered []string
+	for _, sub := range subcommands {
+		if strings.HasPrefix(sub, prefix) {
+			filtered = append(filtered, sub)
+		}
+	}
+	return filtered
+}
+
+// filterResourceTypes filters resource types by prefix
+func (m *Model) filterResourceTypes(prefix string) []string {
+	var suggestions []string
+	for _, resource := range ResourceTypeCompletions {
+		if strings.HasPrefix(resource, prefix) {
+			suggestions = append(suggestions, resource)
+		}
+	}
+	return suggestions
+}
+
+// suggestFlags suggests flags matching the prefix
+func (m *Model) suggestFlags(heuristic CommandHeuristic, prefix string) []string {
+	var suggestions []string
+
+	// Determine if we want short or long flags
+	wantsShort := len(prefix) == 1 || (len(prefix) == 2 && !strings.HasPrefix(prefix, "--"))
+	wantsLong := strings.HasPrefix(prefix, "--")
+
+	for _, flag := range heuristic.Flags {
+		if wantsShort && flag.Shorthand != "" {
+			shortFlag := "-" + flag.Shorthand
+			if strings.HasPrefix(shortFlag, prefix) {
+				suggestions = append(suggestions, shortFlag)
+			}
+		}
+		if wantsLong || !wantsShort {
+			longFlag := "--" + flag.Name
+			if strings.HasPrefix(longFlag, prefix) {
+				suggestions = append(suggestions, longFlag)
+			}
+		}
+	}
+	return suggestions
+}
+
+// suggestCommonFlags suggests common flags (without prefix filter)
+func (m *Model) suggestCommonFlags(heuristic CommandHeuristic) []string {
+	var suggestions []string
+	// Prioritize common flags
+	commonFlagNames := []string{"namespace", "all-namespaces", "output", "selector", "watch", "follow"}
+
+	for _, commonName := range commonFlagNames {
+		for _, flag := range heuristic.Flags {
+			if flag.Name == commonName {
+				if flag.Shorthand != "" {
+					suggestions = append(suggestions, "-"+flag.Shorthand)
+				} else {
+					suggestions = append(suggestions, "--"+flag.Name)
+				}
+				break
+			}
+		}
+	}
+
+	// Limit to top suggestions
+	if len(suggestions) > 6 {
+		return suggestions[:6]
+	}
+	return suggestions
+}
+
+// suggestFlagValue suggests values for a flag
+func (m *Model) suggestFlagValue(heuristic CommandHeuristic, flagName, currentValue string, hasTrailingSpace bool) []string {
+	// Find the flag spec
+	var flagSpec *FlagSpec
+	for i, flag := range heuristic.Flags {
+		if flag.Name == flagName || flag.Shorthand == flagName {
+			flagSpec = &heuristic.Flags[i]
+			break
+		}
+	}
+
+	if flagSpec == nil {
+		return nil
+	}
+
+	// Handle specific flag completions
+	switch flagSpec.Completion {
+	case CompletionNamespace:
+		// If we're here, user is typing the namespace name, not ready for picker yet
+		if !hasTrailingSpace {
+			return nil // Let them type, or they can use picker with second tab
+		}
+	case CompletionNone:
+		// Check for specific flags with known values
+		if flagName == "dry-run" || strings.Contains(flagName, "dry-run") {
+			return DryRunValues
+		}
+		if flagName == "output" || flagName == "o" {
+			return OutputFormatCompletions
+		}
+	}
+
+	return nil
+}
+
+// getResourceTypeArgIndex finds the index of resource type argument
+func (m *Model) getResourceTypeArgIndex(heuristic CommandHeuristic) int {
+	for i, arg := range heuristic.RequiredArgs {
+		if arg.Type == ArgTypeResourceType {
+			return i
+		}
+	}
+	return -1
 }

@@ -108,13 +108,22 @@ func (m Model) renderTypingMode() string {
 			trimmed = strings.TrimPrefix(trimmed, "kubectl ")
 		}
 
-		parts := strings.Fields(trimmed)
-		if len(parts) > 0 {
-			lastPart := parts[len(parts)-1]
-			// Only show suggestion if it starts with what user typed
-			if strings.HasPrefix(suggestion, lastPart) {
-				remainder := strings.TrimPrefix(suggestion, lastPart)
-				b.WriteString(dimStyle.Render(remainder))
+		// Check if there's a trailing space (meaning we're suggesting a new token)
+		hasTrailingSpace := len(currentInput) > 0 && currentInput[len(currentInput)-1] == ' '
+
+		if hasTrailingSpace {
+			// Show full suggestion as a new token
+			b.WriteString(dimStyle.Render(suggestion))
+		} else {
+			// Show completion of current token
+			parts := strings.Fields(trimmed)
+			if len(parts) > 0 {
+				lastPart := parts[len(parts)-1]
+				// Only show suggestion if it starts with what user typed
+				if strings.HasPrefix(suggestion, lastPart) {
+					remainder := strings.TrimPrefix(suggestion, lastPart)
+					b.WriteString(dimStyle.Render(remainder))
+				}
 			}
 		}
 	}

@@ -205,16 +205,26 @@ func (m Model) handleTypingMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				trimmed = strings.TrimPrefix(trimmed, "kubectl ")
 			}
 
-			parts := strings.Fields(trimmed)
-			if len(parts) > 0 {
-				// Replace last part with suggestion
-				suggestion := m.suggestions[m.selectedSuggestion]
-				parts[len(parts)-1] = suggestion
-				newInput := strings.Join(parts, " ")
-				m.commandInput.SetValue(newInput)
-				m.suggestions = nil
-				m.selectedSuggestion = 0
+			suggestion := m.suggestions[m.selectedSuggestion]
+
+			// Check if input has trailing space (means we're adding a new token)
+			hasTrailingSpace := len(currentInput) > 0 && currentInput[len(currentInput)-1] == ' '
+
+			if hasTrailingSpace {
+				// Append suggestion as new token
+				m.commandInput.SetValue(currentInput + suggestion + " ")
+			} else {
+				// Replace last token with suggestion
+				parts := strings.Fields(trimmed)
+				if len(parts) > 0 {
+					parts[len(parts)-1] = suggestion
+					newInput := strings.Join(parts, " ") + " "
+					m.commandInput.SetValue(newInput)
+				}
 			}
+
+			m.suggestions = nil
+			m.selectedSuggestion = 0
 		} else {
 			// Show resource/namespace picker if applicable
 			command := m.commandInput.Value()
