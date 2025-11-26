@@ -196,6 +196,7 @@ func convertToListItems(items []types.ListItem) []list.Item {
 }
 
 // getAutocompleteSuggestions generates autocomplete suggestions based on current input
+// Returns FULL command suggestions that complete the current input
 func (m *Model) getAutocompleteSuggestions(input string) []string {
 	trimmed := strings.TrimSpace(input)
 
@@ -204,8 +205,11 @@ func (m *Model) getAutocompleteSuggestions(input string) []string {
 		return nil
 	}
 
-	// Remove kubectl prefix if present
-	if strings.HasPrefix(trimmed, "kubectl ") {
+	// Track if input was originally prefixed with kubectl
+	hadKubectlPrefix := strings.HasPrefix(trimmed, "kubectl ")
+
+	// Remove kubectl prefix if present for parsing
+	if hadKubectlPrefix {
 		trimmed = strings.TrimPrefix(trimmed, "kubectl ")
 	}
 
@@ -220,12 +224,31 @@ func (m *Model) getAutocompleteSuggestions(input string) []string {
 	}
 
 	// Determine if we're typing a partial token (no trailing space) or ready for next token
-	hasTrailingSpace := len(input) > 0 && input[len(input)-1] == ' '
+	hasTrailingSpace := len(input) > 0 && (input[len(input)-1] == ' ')
 	lastToken := parts[len(parts)-1]
+
+	// Build prefix (everything except last token if we're typing it)
+	var prefix string
+	if hasTrailingSpace {
+		prefix = trimmed + " "
+	} else {
+		// Remove last token from prefix
+		if len(parts) > 1 {
+			prefix = strings.Join(parts[:len(parts)-1], " ") + " "
+		} else {
+			prefix = ""
+		}
+	}
+
+	var suggestions []string
 
 	// CASE 1: Typing/completing a command
 	if len(parts) == 1 && !hasTrailingSpace {
-		return m.suggestCommands(lastToken)
+		cmds := m.suggestCommands(lastToken)
+		for _, cmd := range cmds {
+			suggestions = append(suggestions, cmd)
+		}
+		return suggestions
 	}
 
 	// CASE 2: Command complete, need next token
@@ -237,12 +260,22 @@ func (m *Model) getAutocompleteSuggestions(input string) []string {
 
 		// Check if command has subcommands (like rollout, config, etc.)
 		if len(heuristic.RequiredArgs) > 0 && heuristic.RequiredArgs[0].Type == ArgTypeString {
-			// Return subcommands from description
-			return m.extractSubcommands(heuristic.RequiredArgs[0].Description)
+			// Return full suggestions with subcommands
+			subcommands := m.extractSubcommands(heuristic.RequiredArgs[0].Description)
+			for _, sub := range subcommands {
+				suggestions = append(suggestions, prefix+sub)
+			}
+			return suggestions
 		}
 
 		// Otherwise suggest resource types
-		return ResourceTypeCompletions
+		for _, resource := range ResourceTypeCompletions {
+			suggestions = append(suggestions, prefix+resource)
+			if len(suggestions) >= 10 {
+				break // Limit suggestions
+			}
+		}
+		return suggestions
 	}
 
 	// CASE 3: Multi-part command - need to determine context
@@ -256,44 +289,82 @@ func (m *Model) getAutocompleteSuggestions(input string) []string {
 	if len(heuristic.RequiredArgs) > 0 && heuristic.RequiredArgs[0].Type == ArgTypeString {
 		if len(parts) == 2 && !hasTrailingSpace {
 			// Typing subcommand
-			return m.filterSubcommands(m.extractSubcommands(heuristic.RequiredArgs[0].Description), lastToken)
+			subcommands := m.filterSubcommands(m.extractSubcommands(heuristic.RequiredArgs[0].Description), lastToken)
+			for _, sub := range subcommands {
+				suggestions = append(suggestions, prefix+sub)
+			}
+			return suggestions
 		}
 		if len(parts) == 2 && hasTrailingSpace {
 			// Subcommand complete, suggest resource types
-			return ResourceTypeCompletions
+			for _, resource := range ResourceTypeCompletions {
+				suggestions = append(suggestions, prefix+resource)
+				if len(suggestions) >= 10 {
+					break
+				}
+			}
+			return suggestions
 		}
 		if len(parts) == 3 && !hasTrailingSpace {
 			// Typing resource type after subcommand
-			return m.filterResourceTypes(lastToken)
+			resources := m.filterResourceTypes(lastToken)
+			for _, resource := range resources {
+				suggestions = append(suggestions, prefix+resource)
+			}
+			return suggestions
 		}
 	}
 
 	// Check if last token is a flag
 	if strings.HasPrefix(lastToken, "-") && !hasTrailingSpace {
-		return m.suggestFlags(heuristic, lastToken)
+		flags := m.suggestFlags(heuristic, lastToken)
+		for _, flag := range flags {
+			suggestions = append(suggestions, prefix+flag)
+		}
+		return suggestions
 	}
 
 	// Check if previous token was a flag that needs a value
 	if len(parts) >= 2 && strings.HasPrefix(parts[len(parts)-2], "-") {
 		flagName := strings.TrimLeft(parts[len(parts)-2], "-")
-		return m.suggestFlagValue(heuristic, flagName, lastToken, hasTrailingSpace)
+		values := m.suggestFlagValue(heuristic, flagName, lastToken, hasTrailingSpace)
+		for _, value := range values {
+			if hasTrailingSpace {
+				suggestions = append(suggestions, prefix+value)
+			} else {
+				suggestions = append(suggestions, prefix+value)
+			}
+		}
+		return suggestions
 	}
 
 	// Check if we're completing a resource type
 	resourceArgIndex := m.getResourceTypeArgIndex(heuristic)
 	if resourceArgIndex >= 0 && len(parts) == resourceArgIndex+2 && !hasTrailingSpace {
-		// +2 because: cmd is index 0, resource type is at resourceArgIndex+1 in parts
-		return m.filterResourceTypes(lastToken)
+		// Typing resource type
+		resources := m.filterResourceTypes(lastToken)
+		for _, resource := range resources {
+			suggestions = append(suggestions, prefix+resource)
+		}
+		return suggestions
 	}
 
 	// If resource type complete, suggest flags
 	if resourceArgIndex >= 0 && len(parts) == resourceArgIndex+2 && hasTrailingSpace {
-		return m.suggestCommonFlags(heuristic)
+		flags := m.suggestCommonFlags(heuristic)
+		for _, flag := range flags {
+			suggestions = append(suggestions, prefix+flag)
+		}
+		return suggestions
 	}
 
-	// If we have command + resource, suggest flags or resource names
+	// If we have command + resource, suggest flags
 	if len(parts) >= 2 && hasTrailingSpace {
-		return m.suggestCommonFlags(heuristic)
+		flags := m.suggestCommonFlags(heuristic)
+		for _, flag := range flags {
+			suggestions = append(suggestions, prefix+flag)
+		}
+		return suggestions
 	}
 
 	return nil
