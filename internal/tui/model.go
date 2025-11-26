@@ -32,7 +32,7 @@ type Model struct {
 	height int
 
 	// Kubernetes State
-	cache      *k8s.ResourceCache
+	cache      k8s.Cache
 	context    string
 	namespace  string
 	kubeconfig string
@@ -59,7 +59,7 @@ type Model struct {
 }
 
 // NewModel creates a new application model
-func NewModel(cache *k8s.ResourceCache, hist *history.History, ctx, kubeconfig string) Model {
+func NewModel(cache k8s.Cache, hist *history.History, ctx, kubeconfig string) Model {
 	// Initialize text input with suggestion support
 	ti := textinput.New()
 	ti.Placeholder = "get pods"
@@ -141,7 +141,7 @@ type (
 )
 
 // checkCacheReady checks if the cache is ready
-func checkCacheReady(cache *k8s.ResourceCache) tea.Cmd {
+func checkCacheReady(cache k8s.Cache) tea.Cmd {
 	return func() tea.Msg {
 		// Poll for cache readiness with a small delay
 		ticker := time.NewTicker(100 * time.Millisecond)

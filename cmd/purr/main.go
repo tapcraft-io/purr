@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"os"
 	"os/signal"
@@ -15,6 +16,10 @@ import (
 )
 
 func main() {
+	// Parse command-line flags
+	demoMode := flag.Bool("demo", false, "Run in demo mode with mock Kubernetes data (no cluster required)")
+	flag.Parse()
+
 	// Setup signal handling
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -33,29 +38,47 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Initialize Kubernetes client
-	client, err := k8s.NewClient(cfg.KubeconfigPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error connecting to Kubernetes: %v\n", err)
-		fmt.Fprintf(os.Stderr, "Make sure kubectl is configured and you have access to a cluster.\n")
-		os.Exit(1)
-	}
+	var cache k8s.Cache
+	var currentContext string
 
-	// Get current context
-	currentContext, err := k8s.GetCurrentContext(cfg.KubeconfigPath)
-	if err != nil {
-		currentContext = "unknown"
-	}
+	if *demoMode {
+		// Demo mode: use mock cache
+		fmt.Println("Starting Purr in demo mode with mock data...")
+		cache = k8s.NewMockResourceCache()
+		currentContext = "demo-cluster"
 
-	// Initialize resource cache
-	cache := k8s.NewResourceCache(client.Clientset)
-
-	// Start cache refresh in background
-	go func() {
-		if err := cache.Start(ctx); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: Cache initialization failed: %v\n", err)
+		// Start mock cache (no-op for mock)
+		go func() {
+			if err := cache.Start(ctx); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: Mock cache initialization failed: %v\n", err)
+			}
+		}()
+	} else {
+		// Production mode: connect to real cluster
+		client, err := k8s.NewClient(cfg.KubeconfigPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error connecting to Kubernetes: %v\n", err)
+			fmt.Fprintf(os.Stderr, "Make sure kubectl is configured and you have access to a cluster.\n")
+			fmt.Fprintf(os.Stderr, "Or run with --demo flag to try demo mode without a cluster.\n")
+			os.Exit(1)
 		}
-	}()
+
+		// Get current context
+		currentContext, err = k8s.GetCurrentContext(cfg.KubeconfigPath)
+		if err != nil {
+			currentContext = "unknown"
+		}
+
+		// Initialize resource cache
+		cache = k8s.NewResourceCache(client.Clientset)
+
+		// Start cache refresh in background
+		go func() {
+			if err := cache.Start(ctx); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: Cache initialization failed: %v\n", err)
+			}
+		}()
+	}
 
 	// Initialize history
 	hist, err := history.NewHistory(cfg.HistorySize, cfg.HistoryFile)

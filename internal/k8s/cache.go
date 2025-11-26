@@ -17,6 +17,15 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
+// Cache is the interface for Kubernetes resource caching
+type Cache interface {
+	Start(ctx context.Context) error
+	Stop()
+	IsReady() bool
+	GetNamespaces() []string
+	GetResourceByType(resourceType, namespace string) []types.ListItem
+}
+
 // ResourceCache caches Kubernetes resources for quick access
 type ResourceCache struct {
 	clientset *kubernetes.Clientset
