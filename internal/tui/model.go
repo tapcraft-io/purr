@@ -327,18 +327,10 @@ func (m *Model) getAutocompleteSuggestions(input string) []string {
 	// Check if previous token was a flag that needs a value
 	if len(parts) >= 2 && strings.HasPrefix(parts[len(parts)-2], "-") {
 		flagName := strings.TrimLeft(parts[len(parts)-2], "-")
-		values := m.suggestFlagValue(heuristic, flagName, lastToken, hasTrailingSpace)
-		for _, value := range values {
-			if hasTrailingSpace {
-				suggestions = append(suggestions, prefix+value)
-			} else {
-				suggestions = append(suggestions, prefix+value)
-			}
-		}
-		return suggestions
+		return m.suggestFlagValue(heuristic, flagName, lastToken, hasTrailingSpace, prefix)
 	}
 
-	// Check if we're completing a resource type
+	// Check if we're completing a resource type or resource name
 	resourceArgIndex := m.getResourceTypeArgIndex(heuristic)
 	if resourceArgIndex >= 0 && len(parts) == resourceArgIndex+2 && !hasTrailingSpace {
 		// Typing resource type
@@ -349,8 +341,69 @@ func (m *Model) getAutocompleteSuggestions(input string) []string {
 		return suggestions
 	}
 
-	// If resource type complete, suggest flags
+	// Check if we're typing a resource name (after resource type)
+	if resourceArgIndex >= 0 && len(parts) == resourceArgIndex+3 && !hasTrailingSpace {
+		resourceType := parts[resourceArgIndex+1]
+		if m.cache != nil && m.cache.IsReady() {
+			// Determine namespace to use
+			namespace := m.namespace
+			for i := 0; i < len(parts)-1; i++ {
+				if (parts[i] == "-n" || parts[i] == "--namespace") && i+1 < len(parts) {
+					namespace = parts[i+1]
+					break
+				}
+			}
+
+			// Get resource names from cache and filter by lastToken
+			items := m.cache.GetResourceByType(resourceType, namespace)
+			for _, item := range items {
+				if strings.HasPrefix(item.Title, lastToken) {
+					suggestions = append(suggestions, prefix+item.Title)
+					if len(suggestions) >= 10 {
+						break
+					}
+				}
+			}
+			return suggestions
+		}
+	}
+
+	// If resource type complete, suggest resource names or flags
 	if resourceArgIndex >= 0 && len(parts) == resourceArgIndex+2 && hasTrailingSpace {
+		// First try to suggest resource names from cache
+		resourceType := parts[resourceArgIndex+1]
+		if m.cache != nil && m.cache.IsReady() {
+			// Determine namespace to use
+			namespace := m.namespace
+			for i := 0; i < len(parts)-1; i++ {
+				if (parts[i] == "-n" || parts[i] == "--namespace") && i+1 < len(parts) {
+					namespace = parts[i+1]
+					break
+				}
+			}
+
+			// Get resource names from cache
+			items := m.cache.GetResourceByType(resourceType, namespace)
+			if len(items) > 0 {
+				for _, item := range items {
+					suggestions = append(suggestions, prefix+item.Title)
+					if len(suggestions) >= 10 {
+						break
+					}
+				}
+				// Also add flags as alternatives
+				flags := m.suggestCommonFlags(heuristic)
+				for _, flag := range flags {
+					suggestions = append(suggestions, prefix+flag)
+					if len(suggestions) >= 15 {
+						break
+					}
+				}
+				return suggestions
+			}
+		}
+
+		// Fallback to just flags if no resources found
 		flags := m.suggestCommonFlags(heuristic)
 		for _, flag := range flags {
 			suggestions = append(suggestions, prefix+flag)
@@ -467,7 +520,7 @@ func (m *Model) suggestCommonFlags(heuristic CommandHeuristic) []string {
 }
 
 // suggestFlagValue suggests values for a flag
-func (m *Model) suggestFlagValue(heuristic CommandHeuristic, flagName, currentValue string, hasTrailingSpace bool) []string {
+func (m *Model) suggestFlagValue(heuristic CommandHeuristic, flagName, currentValue string, hasTrailingSpace bool, prefix string) []string {
 	// Find the flag spec
 	var flagSpec *FlagSpec
 	for i, flag := range heuristic.Flags {
@@ -481,20 +534,45 @@ func (m *Model) suggestFlagValue(heuristic CommandHeuristic, flagName, currentVa
 		return nil
 	}
 
+	var suggestions []string
+
 	// Handle specific flag completions
 	switch flagSpec.Completion {
 	case CompletionNamespace:
-		// If we're here, user is typing the namespace name, not ready for picker yet
-		if !hasTrailingSpace {
-			return nil // Let them type, or they can use picker with second tab
+		// Get namespaces from cache
+		if m.cache != nil && m.cache.IsReady() {
+			namespaces := m.cache.GetNamespaces()
+			for _, ns := range namespaces {
+				if hasTrailingSpace {
+					suggestions = append(suggestions, prefix+ns)
+				} else if strings.HasPrefix(ns, currentValue) {
+					suggestions = append(suggestions, prefix+ns)
+				}
+			}
 		}
+		return suggestions
+
 	case CompletionNone:
 		// Check for specific flags with known values
 		if flagName == "dry-run" || strings.Contains(flagName, "dry-run") {
-			return DryRunValues
+			for _, val := range DryRunValues {
+				if hasTrailingSpace {
+					suggestions = append(suggestions, prefix+val)
+				} else if strings.HasPrefix(val, currentValue) {
+					suggestions = append(suggestions, prefix+val)
+				}
+			}
+			return suggestions
 		}
 		if flagName == "output" || flagName == "o" {
-			return OutputFormatCompletions
+			for _, val := range OutputFormatCompletions {
+				if hasTrailingSpace {
+					suggestions = append(suggestions, prefix+val)
+				} else if strings.HasPrefix(val, currentValue) {
+					suggestions = append(suggestions, prefix+val)
+				}
+			}
+			return suggestions
 		}
 	}
 
