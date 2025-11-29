@@ -16,10 +16,19 @@ import (
 	"github.com/tapcraft-io/purr/internal/tui"
 )
 
+// Version is set at build time via ldflags
+var Version = "dev"
+
 func main() {
 	// Parse command-line flags
 	demoMode := flag.Bool("demo", false, "Run in demo mode with mock Kubernetes data (no cluster required)")
+	showVersion := flag.Bool("version", false, "Print version and exit")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Printf("purr version %s\n", Version)
+		os.Exit(0)
+	}
 
 	// Setup signal handling
 	ctx, cancel := context.WithCancel(context.Background())
