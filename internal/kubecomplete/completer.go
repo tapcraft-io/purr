@@ -458,6 +458,14 @@ func (c *Completer) suggestForPositional(cmd *CommandRuntime, ctx CompletionCont
 		return c.suggestResourceTypes(cmd, ctx, td)
 	case TokenResourceName, TokenResourceNameOrSelector:
 		kind := inferResourceKindFromArgs(cmd, args)
+
+		// For certain commands, if we can't infer the kind, suggest resource types first
+		if kind == "" && len(args) == 0 {
+			// First positional with no args - suggest resource type instead
+			// This handles commands like "logs", "describe", "delete", etc.
+			return c.suggestResourceTypes(cmd, ctx, td)
+		}
+
 		return c.suggestResourceNames(ctx, kind, ctx.CurrentNamespace, td)
 	case TokenNamespace:
 		return c.suggestNamespaces(ctx)
