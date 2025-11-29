@@ -92,7 +92,7 @@ func (m Model) renderTypingMode() string {
 	b.WriteString(title)
 	b.WriteString("\n\n")
 
-	// Command input
+	// Command input (textinput handles suggestions natively)
 	b.WriteString(RenderPrompt())
 	b.WriteString(m.commandInput.View())
 	b.WriteString("\n\n")
@@ -219,8 +219,9 @@ func (m Model) renderConfirmingMode() string {
 // renderHelpBar renders the help bar at the bottom
 func (m Model) renderHelpBar() string {
 	items := []string{
-		"[Tab] autocomplete",
-		"[!] shell command",
+		"[Tab] accept",
+		"[Ctrl+N/P] cycle",
+		"[Ctrl+Space] picker",
 		"[Ctrl+R] history",
 		"[Ctrl+L] clear",
 		"[Ctrl+C] quit",

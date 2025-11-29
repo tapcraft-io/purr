@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/spinner"
@@ -40,13 +41,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.result.Error != nil {
 			m.cmdError = msg.result.Error
 			m.cmdOutput += "\n" + msg.result.Stderr
-			m.mode = types.ModeViewingOutput
 			if m.history != nil {
 				m.history.Add(msg.cmd, false, m.context, m.namespace)
 			}
 		} else {
 			m.cmdError = nil
-			m.mode = types.ModeViewingOutput
 			if m.history != nil {
 				m.history.Add(msg.cmd, true, m.context, m.namespace)
 			}
@@ -57,6 +56,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.history != nil {
 			_ = m.history.Save()
 		}
+		// Auto-return to typing mode with cleared input
+		m.mode = types.ModeTyping
+		m.commandInput.SetValue("")
+		m.commandInput.Focus()
 
 	case errMsg:
 		m.err = msg.err
@@ -96,14 +99,24 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Global keybindings
 	switch msg.String() {
 	case "ctrl+c":
-		if m.mode == types.ModeViewingOutput {
-			// First Ctrl+C returns to typing mode
-			m.mode = types.ModeTyping
-			m.commandInput.Focus()
-			return m, nil
+		now := time.Now()
+		// Reset counter if more than 1 second has passed since last Ctrl+C
+		if now.Sub(m.ctrlCTime) > time.Second {
+			m.ctrlCPressed = 0
 		}
-		m.quitting = true
-		return m, tea.Quit
+
+		m.ctrlCPressed++
+		m.ctrlCTime = now
+
+		// Require double Ctrl+C to quit
+		if m.ctrlCPressed >= 2 {
+			m.quitting = true
+			return m, tea.Quit
+		}
+
+		// First Ctrl+C shows a hint
+		m.statusMsg = "Press Ctrl+C again to quit"
+		return m, nil
 
 	case "esc":
 		// Cancel current operation and return to typing
@@ -135,6 +148,11 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // handleTypingMode handles key presses in typing mode
 func (m Model) handleTypingMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
+
+	// Reset ctrl+c counter on any other key
+	if msg.String() != "ctrl+c" {
+		m.ctrlCPressed = 0
+	}
 
 	switch msg.String() {
 	case "enter":
@@ -173,36 +191,40 @@ func (m Model) handleTypingMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.cmdOutput = ""
 		m.viewport.SetContent("")
 		m.commandInput.SetValue("")
+		m.commandInput.SetSuggestions([]string{"get", "describe", "logs", "apply", "delete", "exec", "create", "rollout", "scale"})
 		return m, nil
 
-	case "tab":
-		// Trigger autocomplete
+	case "ctrl+space":
+		// Show resource/namespace picker if applicable
 		command := m.commandInput.Value()
 		trimmedCmd := strings.TrimSpace(command)
-		if trimmedCmd == "" || strings.HasPrefix(trimmedCmd, "!") {
-			return m, nil
-		}
+		if trimmedCmd != "" && !strings.HasPrefix(trimmedCmd, "!") {
+			// Parse command to see what completions are needed
+			if m.parser != nil {
+				parsed := m.parser.Parse(trimmedCmd)
+				m.currentCmd = parsed
 
-		// Parse command to see what completions are needed
-		if m.parser != nil {
-			parsed := m.parser.Parse(trimmedCmd)
-			m.currentCmd = parsed
+				// Check if we need to show namespace picker
+				if strings.HasSuffix(command, "-n ") || strings.HasSuffix(command, "--namespace ") {
+					return m.showNamespacePicker()
+				}
 
-			// Check if we need to show namespace picker
-			if strings.HasSuffix(command, "-n ") || strings.HasSuffix(command, "--namespace ") {
-				return m.showNamespacePicker()
-			}
-
-			// Check if we need to show resource picker
-			if parsed.Resource != "" && parsed.ResourceName == "" {
-				return m.showResourcePicker(parsed.Resource, parsed.Namespace)
+				// Check if we need to show resource picker
+				if parsed.Resource != "" && parsed.ResourceName == "" {
+					return m.showResourcePicker(parsed.Resource, parsed.Namespace)
+				}
 			}
 		}
+		return m, nil
 	}
 
 	var cmd tea.Cmd
 	m.commandInput, cmd = m.commandInput.Update(msg)
 	cmds = append(cmds, cmd)
+
+	// Update autocomplete suggestions after every keystroke
+	suggestions := m.getAutocompleteSuggestions(m.commandInput.Value())
+	m.commandInput.SetSuggestions(suggestions)
 
 	return m, tea.Batch(cmds...)
 }

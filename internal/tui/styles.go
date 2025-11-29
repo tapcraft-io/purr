@@ -108,6 +108,10 @@ var (
 			Foreground(colorAccent).
 			Bold(true)
 
+	// Dimmed text (for autocomplete suggestions)
+	dimStyle = lipgloss.NewStyle().
+			Foreground(colorTextDim)
+
 	// Spinner style
 	spinnerStyle = lipgloss.NewStyle().
 			Foreground(colorPrimary)

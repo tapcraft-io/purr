@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/list"
@@ -31,7 +32,7 @@ type Model struct {
 	height int
 
 	// Kubernetes State
-	cache      *k8s.ResourceCache
+	cache      k8s.Cache
 	context    string
 	namespace  string
 	kubeconfig string
@@ -43,25 +44,31 @@ type Model struct {
 	cmdError   error
 
 	// Services
-	history  *history.History
-	executor *exec.Executor
-	parser   *exec.Parser
+	history         *history.History
+	executor        *exec.Executor
+	parser          *exec.Parser
+	kubectlComplete *KubectlCompleter
 
 	// Flags
-	ready     bool
-	quitting  bool
-	err       error
-	statusMsg string
+	ready        bool
+	quitting     bool
+	err          error
+	statusMsg    string
+	ctrlCPressed int       // Track consecutive Ctrl+C presses
+	ctrlCTime    time.Time // Track time of last Ctrl+C
 }
 
 // NewModel creates a new application model
-func NewModel(cache *k8s.ResourceCache, hist *history.History, ctx, kubeconfig string) Model {
-	// Initialize text input
+func NewModel(cache k8s.Cache, hist *history.History, ctx, kubeconfig string) Model {
+	// Initialize text input with suggestion support
 	ti := textinput.New()
 	ti.Placeholder = "get pods"
 	ti.Focus()
 	ti.CharLimit = 500
 	ti.Width = 80
+	ti.ShowSuggestions = true
+	// Set initial suggestions to common commands
+	ti.SetSuggestions([]string{"get", "describe", "logs", "apply", "delete", "exec", "create", "rollout", "scale"})
 
 	// Initialize spinner
 	s := spinner.New()
@@ -75,6 +82,9 @@ func NewModel(cache *k8s.ResourceCache, hist *history.History, ctx, kubeconfig s
 	}
 
 	parser := exec.NewParser()
+
+	// Initialize kubectl completer
+	kubectlComplete := NewKubectlCompleter()
 
 	// Initialize viewport
 	vp := viewport.New(80, 20)
@@ -94,19 +104,20 @@ func NewModel(cache *k8s.ResourceCache, hist *history.History, ctx, kubeconfig s
 	hl.SetFilteringEnabled(true)
 
 	return Model{
-		commandInput: ti,
-		resourceList: rl,
-		viewport:     vp,
-		historyList:  hl,
-		spinner:      s,
-		mode:         types.ModeTyping,
-		cache:        cache,
-		history:      hist,
-		context:      ctx,
-		kubeconfig:   kubeconfig,
-		executor:     executor,
-		parser:       parser,
-		namespace:    "default",
+		commandInput:    ti,
+		resourceList:    rl,
+		viewport:        vp,
+		historyList:     hl,
+		spinner:         s,
+		mode:            types.ModeTyping,
+		cache:           cache,
+		history:         hist,
+		context:         ctx,
+		kubeconfig:      kubeconfig,
+		executor:        executor,
+		parser:          parser,
+		kubectlComplete: kubectlComplete,
+		namespace:       "default",
 	}
 }
 
@@ -130,7 +141,7 @@ type (
 )
 
 // checkCacheReady checks if the cache is ready
-func checkCacheReady(cache *k8s.ResourceCache) tea.Cmd {
+func checkCacheReady(cache k8s.Cache) tea.Cmd {
 	return func() tea.Msg {
 		// Poll for cache readiness with a small delay
 		ticker := time.NewTicker(100 * time.Millisecond)
@@ -187,4 +198,471 @@ func convertToListItems(items []types.ListItem) []list.Item {
 		result[i] = listItem{item: item}
 	}
 	return result
+}
+
+// getAutocompleteSuggestions generates autocomplete suggestions based on current input
+// Returns FULL command suggestions that complete the current input
+func (m *Model) getAutocompleteSuggestions(input string) []string {
+	trimmed := strings.TrimSpace(input)
+
+	// Don't suggest for shell commands
+	if strings.HasPrefix(trimmed, "!") {
+		return nil
+	}
+
+	// Track if input was originally prefixed with kubectl
+	hadKubectlPrefix := strings.HasPrefix(trimmed, "kubectl ")
+
+	// Remove kubectl prefix if present for parsing
+	if hadKubectlPrefix {
+		trimmed = strings.TrimPrefix(trimmed, "kubectl ")
+	}
+
+	// If input is empty or just whitespace, suggest common commands
+	if trimmed == "" {
+		return []string{"get", "describe", "logs", "apply", "delete", "exec", "create", "rollout", "scale"}
+	}
+
+	parts := strings.Fields(trimmed)
+	if len(parts) == 0 {
+		return []string{"get", "describe", "logs", "apply", "delete", "exec", "create", "rollout", "scale"}
+	}
+
+	// Try kubectl's native completion first
+	if m.kubectlComplete != nil {
+		kubectlSuggestions := m.kubectlComplete.GetFullSuggestions(trimmed)
+		if len(kubectlSuggestions) > 0 {
+			// Also check if we should add cache-based resource names
+			return m.enhanceWithCacheSuggestions(trimmed, kubectlSuggestions)
+		}
+	}
+
+	// Fallback to our heuristics if kubectl completion fails or is unavailable
+
+	// Determine if we're typing a partial token (no trailing space) or ready for next token
+	hasTrailingSpace := len(input) > 0 && (input[len(input)-1] == ' ')
+	lastToken := parts[len(parts)-1]
+
+	// Build prefix (everything except last token if we're typing it)
+	var prefix string
+	if hasTrailingSpace {
+		prefix = trimmed + " "
+	} else {
+		// Remove last token from prefix
+		if len(parts) > 1 {
+			prefix = strings.Join(parts[:len(parts)-1], " ") + " "
+		} else {
+			prefix = ""
+		}
+	}
+
+	var suggestions []string
+
+	// CASE 1: Typing/completing a command
+	if len(parts) == 1 && !hasTrailingSpace {
+		cmds := m.suggestCommands(lastToken)
+		for _, cmd := range cmds {
+			suggestions = append(suggestions, cmd)
+		}
+		return suggestions
+	}
+
+	// CASE 2: Command complete, need next token
+	if len(parts) == 1 && hasTrailingSpace {
+		heuristic, ok := GetCommandHeuristic(parts[0])
+		if !ok {
+			return nil
+		}
+
+		// Check if command has subcommands (like rollout, config, etc.)
+		if len(heuristic.RequiredArgs) > 0 && heuristic.RequiredArgs[0].Type == ArgTypeString {
+			// Return full suggestions with subcommands
+			subcommands := m.extractSubcommands(heuristic.RequiredArgs[0].Description)
+			for _, sub := range subcommands {
+				suggestions = append(suggestions, prefix+sub)
+			}
+			return suggestions
+		}
+
+		// Otherwise suggest resource types
+		for _, resource := range ResourceTypeCompletions {
+			suggestions = append(suggestions, prefix+resource)
+			if len(suggestions) >= 10 {
+				break // Limit suggestions
+			}
+		}
+		return suggestions
+	}
+
+	// CASE 3: Multi-part command - need to determine context
+	cmd := parts[0]
+	heuristic, ok := GetCommandHeuristic(cmd)
+	if !ok {
+		return nil
+	}
+
+	// Check if we're completing a subcommand
+	if len(heuristic.RequiredArgs) > 0 && heuristic.RequiredArgs[0].Type == ArgTypeString {
+		if len(parts) == 2 && !hasTrailingSpace {
+			// Typing subcommand
+			subcommands := m.filterSubcommands(m.extractSubcommands(heuristic.RequiredArgs[0].Description), lastToken)
+			for _, sub := range subcommands {
+				suggestions = append(suggestions, prefix+sub)
+			}
+			return suggestions
+		}
+		if len(parts) == 2 && hasTrailingSpace {
+			// Subcommand complete, suggest resource types
+			for _, resource := range ResourceTypeCompletions {
+				suggestions = append(suggestions, prefix+resource)
+				if len(suggestions) >= 10 {
+					break
+				}
+			}
+			return suggestions
+		}
+		if len(parts) == 3 && !hasTrailingSpace {
+			// Typing resource type after subcommand
+			resources := m.filterResourceTypes(lastToken)
+			for _, resource := range resources {
+				suggestions = append(suggestions, prefix+resource)
+			}
+			return suggestions
+		}
+	}
+
+	// Check if last token is a flag
+	if strings.HasPrefix(lastToken, "-") && !hasTrailingSpace {
+		flags := m.suggestFlags(heuristic, lastToken)
+		for _, flag := range flags {
+			suggestions = append(suggestions, prefix+flag)
+		}
+		return suggestions
+	}
+
+	// Check if previous token was a flag that needs a value
+	if len(parts) >= 2 && strings.HasPrefix(parts[len(parts)-2], "-") {
+		flagName := strings.TrimLeft(parts[len(parts)-2], "-")
+		return m.suggestFlagValue(heuristic, flagName, lastToken, hasTrailingSpace, prefix)
+	}
+
+	// Check if we're completing a resource type or resource name
+	resourceArgIndex := m.getResourceTypeArgIndex(heuristic)
+	if resourceArgIndex >= 0 && len(parts) == resourceArgIndex+2 && !hasTrailingSpace {
+		// Typing resource type
+		resources := m.filterResourceTypes(lastToken)
+		for _, resource := range resources {
+			suggestions = append(suggestions, prefix+resource)
+		}
+		return suggestions
+	}
+
+	// Check if we're typing a resource name (after resource type)
+	if resourceArgIndex >= 0 && len(parts) == resourceArgIndex+3 && !hasTrailingSpace {
+		resourceType := parts[resourceArgIndex+1]
+		if m.cache != nil && m.cache.IsReady() {
+			// Determine namespace to use
+			namespace := m.namespace
+			for i := 0; i < len(parts)-1; i++ {
+				if (parts[i] == "-n" || parts[i] == "--namespace") && i+1 < len(parts) {
+					namespace = parts[i+1]
+					break
+				}
+			}
+
+			// Get resource names from cache and filter by lastToken
+			items := m.cache.GetResourceByType(resourceType, namespace)
+			for _, item := range items {
+				if strings.HasPrefix(item.Title, lastToken) {
+					suggestions = append(suggestions, prefix+item.Title)
+					if len(suggestions) >= 10 {
+						break
+					}
+				}
+			}
+			return suggestions
+		}
+	}
+
+	// If resource type complete, suggest resource names or flags
+	if resourceArgIndex >= 0 && len(parts) == resourceArgIndex+2 && hasTrailingSpace {
+		// First try to suggest resource names from cache
+		resourceType := parts[resourceArgIndex+1]
+		if m.cache != nil && m.cache.IsReady() {
+			// Determine namespace to use
+			namespace := m.namespace
+			for i := 0; i < len(parts)-1; i++ {
+				if (parts[i] == "-n" || parts[i] == "--namespace") && i+1 < len(parts) {
+					namespace = parts[i+1]
+					break
+				}
+			}
+
+			// Get resource names from cache
+			items := m.cache.GetResourceByType(resourceType, namespace)
+			if len(items) > 0 {
+				for _, item := range items {
+					suggestions = append(suggestions, prefix+item.Title)
+					if len(suggestions) >= 10 {
+						break
+					}
+				}
+				// Also add flags as alternatives
+				flags := m.suggestCommonFlags(heuristic)
+				for _, flag := range flags {
+					suggestions = append(suggestions, prefix+flag)
+					if len(suggestions) >= 15 {
+						break
+					}
+				}
+				return suggestions
+			}
+		}
+
+		// Fallback to just flags if no resources found
+		flags := m.suggestCommonFlags(heuristic)
+		for _, flag := range flags {
+			suggestions = append(suggestions, prefix+flag)
+		}
+		return suggestions
+	}
+
+	// If we have command + resource, suggest flags
+	if len(parts) >= 2 && hasTrailingSpace {
+		flags := m.suggestCommonFlags(heuristic)
+		for _, flag := range flags {
+			suggestions = append(suggestions, prefix+flag)
+		}
+		return suggestions
+	}
+
+	return nil
+}
+
+// suggestCommands suggests commands matching the prefix
+func (m *Model) suggestCommands(prefix string) []string {
+	var suggestions []string
+	for cmd := range KubectlHeuristics {
+		if strings.HasPrefix(cmd, prefix) {
+			suggestions = append(suggestions, cmd)
+		}
+	}
+	return suggestions
+}
+
+// extractSubcommands extracts subcommands from description field
+func (m *Model) extractSubcommands(description string) []string {
+	// Look for patterns like "status|history|pause|resume|restart|undo"
+	if strings.Contains(description, "|") {
+		return strings.Split(description, "|")
+	}
+	return nil
+}
+
+// filterSubcommands filters subcommands by prefix
+func (m *Model) filterSubcommands(subcommands []string, prefix string) []string {
+	if len(subcommands) == 0 {
+		return nil
+	}
+	var filtered []string
+	for _, sub := range subcommands {
+		if strings.HasPrefix(sub, prefix) {
+			filtered = append(filtered, sub)
+		}
+	}
+	return filtered
+}
+
+// filterResourceTypes filters resource types by prefix
+func (m *Model) filterResourceTypes(prefix string) []string {
+	var suggestions []string
+	for _, resource := range ResourceTypeCompletions {
+		if strings.HasPrefix(resource, prefix) {
+			suggestions = append(suggestions, resource)
+		}
+	}
+	return suggestions
+}
+
+// suggestFlags suggests flags matching the prefix
+func (m *Model) suggestFlags(heuristic CommandHeuristic, prefix string) []string {
+	var suggestions []string
+
+	// Determine if we want short or long flags
+	wantsShort := len(prefix) == 1 || (len(prefix) == 2 && !strings.HasPrefix(prefix, "--"))
+	wantsLong := strings.HasPrefix(prefix, "--")
+
+	for _, flag := range heuristic.Flags {
+		if wantsShort && flag.Shorthand != "" {
+			shortFlag := "-" + flag.Shorthand
+			if strings.HasPrefix(shortFlag, prefix) {
+				suggestions = append(suggestions, shortFlag)
+			}
+		}
+		if wantsLong || !wantsShort {
+			longFlag := "--" + flag.Name
+			if strings.HasPrefix(longFlag, prefix) {
+				suggestions = append(suggestions, longFlag)
+			}
+		}
+	}
+	return suggestions
+}
+
+// suggestCommonFlags suggests common flags (without prefix filter)
+func (m *Model) suggestCommonFlags(heuristic CommandHeuristic) []string {
+	var suggestions []string
+	// Prioritize common flags
+	commonFlagNames := []string{"namespace", "all-namespaces", "output", "selector", "watch", "follow"}
+
+	for _, commonName := range commonFlagNames {
+		for _, flag := range heuristic.Flags {
+			if flag.Name == commonName {
+				if flag.Shorthand != "" {
+					suggestions = append(suggestions, "-"+flag.Shorthand)
+				} else {
+					suggestions = append(suggestions, "--"+flag.Name)
+				}
+				break
+			}
+		}
+	}
+
+	// Limit to top suggestions
+	if len(suggestions) > 6 {
+		return suggestions[:6]
+	}
+	return suggestions
+}
+
+// suggestFlagValue suggests values for a flag
+func (m *Model) suggestFlagValue(heuristic CommandHeuristic, flagName, currentValue string, hasTrailingSpace bool, prefix string) []string {
+	// Find the flag spec
+	var flagSpec *FlagSpec
+	for i, flag := range heuristic.Flags {
+		if flag.Name == flagName || flag.Shorthand == flagName {
+			flagSpec = &heuristic.Flags[i]
+			break
+		}
+	}
+
+	if flagSpec == nil {
+		return nil
+	}
+
+	var suggestions []string
+
+	// Handle specific flag completions
+	switch flagSpec.Completion {
+	case CompletionNamespace:
+		// Get namespaces from cache
+		if m.cache != nil && m.cache.IsReady() {
+			namespaces := m.cache.GetNamespaces()
+			for _, ns := range namespaces {
+				if hasTrailingSpace {
+					suggestions = append(suggestions, prefix+ns)
+				} else if strings.HasPrefix(ns, currentValue) {
+					suggestions = append(suggestions, prefix+ns)
+				}
+			}
+		}
+		return suggestions
+
+	case CompletionNone:
+		// Check for specific flags with known values
+		if flagName == "dry-run" || strings.Contains(flagName, "dry-run") {
+			for _, val := range DryRunValues {
+				if hasTrailingSpace {
+					suggestions = append(suggestions, prefix+val)
+				} else if strings.HasPrefix(val, currentValue) {
+					suggestions = append(suggestions, prefix+val)
+				}
+			}
+			return suggestions
+		}
+		if flagName == "output" || flagName == "o" {
+			for _, val := range OutputFormatCompletions {
+				if hasTrailingSpace {
+					suggestions = append(suggestions, prefix+val)
+				} else if strings.HasPrefix(val, currentValue) {
+					suggestions = append(suggestions, prefix+val)
+				}
+			}
+			return suggestions
+		}
+	}
+
+	return nil
+}
+
+// getResourceTypeArgIndex finds the index of resource type argument
+func (m *Model) getResourceTypeArgIndex(heuristic CommandHeuristic) int {
+	for i, arg := range heuristic.RequiredArgs {
+		if arg.Type == ArgTypeResourceType {
+			return i
+		}
+	}
+	return -1
+}
+
+// enhanceWithCacheSuggestions enhances kubectl's suggestions with actual resource names from cache
+func (m *Model) enhanceWithCacheSuggestions(input string, kubectlSuggestions []string) []string {
+	// If kubectl suggested resource types, also suggest actual resource names
+	parts := strings.Fields(input)
+	if len(parts) < 2 {
+		return kubectlSuggestions
+	}
+
+	// Check if we just completed a resource type (e.g., "get pods ")
+	hasTrailingSpace := len(input) > 0 && input[len(input)-1] == ' '
+	if !hasTrailingSpace {
+		return kubectlSuggestions
+	}
+
+	lastToken := parts[len(parts)-1]
+
+	// Check if last token looks like a resource type
+	isResourceType := false
+	for _, rt := range ResourceTypeCompletions {
+		if rt == lastToken || strings.HasPrefix(rt, lastToken) {
+			isResourceType = true
+			break
+		}
+	}
+
+	if !isResourceType {
+		return kubectlSuggestions
+	}
+
+	// Try to get resource names from cache
+	if m.cache != nil && m.cache.IsReady() {
+		// Determine namespace to use
+		namespace := m.namespace
+		for i := 0; i < len(parts)-1; i++ {
+			if (parts[i] == "-n" || parts[i] == "--namespace") && i+1 < len(parts) {
+				namespace = parts[i+1]
+				break
+			}
+		}
+
+		items := m.cache.GetResourceByType(lastToken, namespace)
+		if len(items) > 0 {
+			// Add actual resource names before kubectl's suggestions
+			enhanced := make([]string, 0, len(items)+len(kubectlSuggestions))
+			prefix := input + " "
+
+			for i, item := range items {
+				enhanced = append(enhanced, prefix+item.Title)
+				if i >= 9 { // Limit to 10 resource names
+					break
+				}
+			}
+
+			// Add kubectl's suggestions (flags, etc.) after
+			enhanced = append(enhanced, kubectlSuggestions...)
+			return enhanced
+		}
+	}
+
+	return kubectlSuggestions
 }
