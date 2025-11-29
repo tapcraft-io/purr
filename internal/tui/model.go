@@ -199,9 +199,9 @@ func convertToListItems(items []types.ListItem) []list.Item {
 }
 
 // getAutocompleteSuggestions generates autocomplete suggestions based on current input
-// Returns FULL command suggestions that complete the current input
+// Returns just the next token(s) to suggest, not full commands
 func (m *Model) getAutocompleteSuggestions(input string) []string {
-	// Don't suggest for shell commands (but preserve leading/trailing spaces for other checks)
+	// Don't suggest for shell commands
 	if strings.HasPrefix(strings.TrimSpace(input), "!") {
 		return nil
 	}
@@ -211,14 +211,11 @@ func (m *Model) getAutocompleteSuggestions(input string) []string {
 		return nil
 	}
 
-	// IMPORTANT: Don't trim spaces - trailing space indicates readiness for next token
-	hasTrailingSpace := len(input) > 0 && input[len(input)-1] == ' '
-
-	// For the completer, we need to work with the line as-is but add a placeholder
-	// when there's trailing space to indicate we want suggestions for the next token
+	// Always treat input as if it has trailing space for suggestion purposes
+	// This way we always suggest the next token, not completion of current token
 	completionLine := input
-	if hasTrailingSpace {
-		completionLine = input + ""  // Keep trailing space
+	if len(input) > 0 && input[len(input)-1] != ' ' {
+		completionLine = input + " "
 	}
 
 	// Use the new kubecomplete engine
@@ -233,38 +230,31 @@ func (m *Model) getAutocompleteSuggestions(input string) []string {
 		return nil
 	}
 
-	// Convert kubecomplete.Suggestion to string suggestions for the textinput
+	// Extract just the suggestion values (next token only), not full commands
+	// Also filter by current partial token if user is typing one
 	trimmed := strings.TrimSpace(input)
 	tokens := strings.Fields(trimmed)
-	var prefix string
 
-	if hasTrailingSpace || len(tokens) == 0 {
-		// Append suggestions as new tokens
-		if len(trimmed) > 0 {
-			prefix = trimmed + " "
-		}
-	} else {
-		// Replace last token with suggestion
-		if len(tokens) > 1 {
-			prefix = strings.Join(tokens[:len(tokens)-1], " ") + " "
-		}
+	// Determine if user is typing a partial token or finished with space
+	var currentPartial string
+	if len(input) > 0 && input[len(input)-1] != ' ' && len(tokens) > 0 {
+		// User is typing a partial token - filter suggestions
+		currentPartial = tokens[len(tokens)-1]
 	}
 
 	result := make([]string, 0, len(suggestions))
-	for i, sug := range suggestions {
-		if i >= 15 { // Limit to 15 suggestions
+	for _, sug := range suggestions {
+		// Filter by partial token if typing
+		if currentPartial != "" && !strings.HasPrefix(sug.Value, currentPartial) {
+			continue
+		}
+
+		// Return just the suggestion value (next token)
+		result = append(result, sug.Value)
+
+		if len(result) >= 20 { // Limit to 20 suggestions
 			break
 		}
-
-		// Filter suggestions that start with the current last token (if not trailing space)
-		if !hasTrailingSpace && len(tokens) > 0 {
-			lastToken := tokens[len(tokens)-1]
-			if !strings.HasPrefix(sug.Value, lastToken) {
-				continue
-			}
-		}
-
-		result = append(result, prefix+sug.Value)
 	}
 
 	return result

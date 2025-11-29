@@ -39,7 +39,15 @@ func (c *Completer) Complete(line string, cursor int, ctx CompletionContext) []S
 
 	cmd, pathLen := c.Registry.MatchCommand(tokens)
 	if cmd == nil {
-		// no command yet → suggest command names
+		// No exact command match - check if we're building a subcommand
+		// e.g., "rollout " should suggest subcommands like "restart", "status"
+		if hasTrailingSpace {
+			subcommands := c.suggestSubcommands(tokens)
+			if len(subcommands) > 0 {
+				return subcommands
+			}
+		}
+		// Otherwise suggest top-level command names
 		return c.suggestTopLevelCommands(tokens[0])
 	}
 
@@ -83,6 +91,50 @@ func (c *Completer) suggestTopLevelCommands(prefix string) []Suggestion {
 			})
 		}
 	}
+	sortSuggestions(out)
+	return out
+}
+
+// suggestSubcommands suggests the next part of a multi-part command
+// e.g., for ["rollout"], suggest ["restart", "status", "pause", ...]
+func (c *Completer) suggestSubcommands(tokens []string) []Suggestion {
+	if c.Registry == nil || len(tokens) == 0 {
+		return nil
+	}
+
+	seen := make(map[string]bool)
+	var out []Suggestion
+
+	// Look through all commands to find ones that start with our tokens
+	for _, cmd := range c.Registry.Commands {
+		if len(cmd.Spec.Path) <= len(tokens) {
+			continue
+		}
+
+		// Check if this command's path starts with our tokens
+		matches := true
+		for i, tok := range tokens {
+			if i >= len(cmd.Spec.Path) || cmd.Spec.Path[i] != tok {
+				matches = false
+				break
+			}
+		}
+
+		if matches {
+			// Suggest the next token in the path
+			nextToken := cmd.Spec.Path[len(tokens)]
+			if !seen[nextToken] {
+				seen[nextToken] = true
+				out = append(out, Suggestion{
+					Value:       nextToken,
+					Kind:        SuggestCommand,
+					Description: "",
+					Score:       50,
+				})
+			}
+		}
+	}
+
 	sortSuggestions(out)
 	return out
 }
