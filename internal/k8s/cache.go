@@ -24,6 +24,13 @@ type Cache interface {
 	IsReady() bool
 	GetNamespaces() []string
 	GetResourceByType(resourceType, namespace string) []types.ListItem
+
+	// ClusterCache interface methods (for kubecomplete)
+	Namespaces() []string
+	ResourceTypes() []string
+	ResourceTypesForCommand(path []string) []string
+	ResourceNames(kind, namespace string) []string
+	Containers(namespace, resourceKind, resourceName string) []string
 }
 
 // ResourceCache caches Kubernetes resources for quick access
@@ -682,4 +689,164 @@ func (rc *ResourceCache) IsReady() bool {
 	rc.mu.RLock()
 	defer rc.mu.RUnlock()
 	return !rc.lastRefresh.IsZero()
+}
+
+// Namespaces returns all cached namespace names (alias for GetNamespaces for ClusterCache interface)
+func (rc *ResourceCache) Namespaces() []string {
+	return rc.GetNamespaces()
+}
+
+// ResourceTypes returns all known resource types
+func (rc *ResourceCache) ResourceTypes() []string {
+	return []string{
+		"pods", "po",
+		"deployments", "deploy",
+		"services", "svc",
+		"replicasets", "rs",
+		"statefulsets", "sts",
+		"daemonsets", "ds",
+		"jobs",
+		"cronjobs", "cj",
+		"configmaps", "cm",
+		"secrets",
+		"persistentvolumeclaims", "pvc",
+		"persistentvolumes", "pv",
+		"storageclasses", "sc",
+		"ingresses", "ing",
+		"networkpolicies", "netpol",
+		"nodes", "no",
+		"namespaces", "ns",
+		"serviceaccounts", "sa",
+		"roles",
+		"rolebindings",
+		"clusterroles",
+		"clusterrolebindings",
+		"replicationcontrollers", "rc",
+		"horizontalpodautoscalers", "hpa",
+		"poddisruptionbudgets", "pdb",
+		"endpoints", "ep",
+		"events", "ev",
+		"limitranges", "limits",
+		"resourcequotas", "quota",
+	}
+}
+
+// ResourceTypesForCommand returns resource types specific to a command path
+func (rc *ResourceCache) ResourceTypesForCommand(path []string) []string {
+	if len(path) == 0 {
+		return nil
+	}
+
+	// Special handling for certain commands
+	key := strings.Join(path, " ")
+	switch key {
+	case "rollout restart", "rollout status", "rollout history", "rollout pause", "rollout resume", "rollout undo":
+		return []string{"deployment", "deployments", "deploy", "daemonset", "daemonsets", "ds", "statefulset", "statefulsets", "sts"}
+	case "logs":
+		return []string{"pod", "pods", "po"}
+	case "exec":
+		return []string{"pod", "pods", "po"}
+	case "top":
+		return []string{"node", "nodes", "no", "pod", "pods", "po"}
+	default:
+		// Return all resource types for general commands
+		return nil
+	}
+}
+
+// ResourceNames returns names of resources of a given kind in a namespace
+func (rc *ResourceCache) ResourceNames(kind, namespace string) []string {
+	items := rc.GetResourceByType(kind, namespace)
+	names := make([]string, 0, len(items))
+	for _, item := range items {
+		names = append(names, item.Title)
+	}
+	return names
+}
+
+// Containers returns container names for a given pod/workload
+func (rc *ResourceCache) Containers(namespace, resourceKind, resourceName string) []string {
+	rc.mu.RLock()
+	defer rc.mu.RUnlock()
+
+	if namespace == "" {
+		namespace = "default"
+	}
+
+	var containers []string
+
+	// Get containers from pods
+	if pods, ok := rc.pods[namespace]; ok {
+		for _, pod := range pods {
+			// If resourceName is specified, only get containers from that pod
+			if resourceName != "" && pod.Name != resourceName {
+				continue
+			}
+
+			for _, container := range pod.Spec.Containers {
+				containers = append(containers, container.Name)
+			}
+			for _, container := range pod.Spec.InitContainers {
+				containers = append(containers, container.Name)
+			}
+		}
+	}
+
+	// If looking for a deployment/statefulset/daemonset, find their pods and get containers
+	if resourceName != "" && (resourceKind == "deployment" || resourceKind == "deployments" || resourceKind == "deploy") {
+		if deps, ok := rc.deployments[namespace]; ok {
+			for _, dep := range deps {
+				if dep.Name == resourceName {
+					for _, container := range dep.Spec.Template.Spec.Containers {
+						containers = append(containers, container.Name)
+					}
+					for _, container := range dep.Spec.Template.Spec.InitContainers {
+						containers = append(containers, container.Name)
+					}
+				}
+			}
+		}
+	}
+
+	if resourceName != "" && (resourceKind == "statefulset" || resourceKind == "statefulsets" || resourceKind == "sts") {
+		if sts, ok := rc.statefulsets[namespace]; ok {
+			for _, s := range sts {
+				if s.Name == resourceName {
+					for _, container := range s.Spec.Template.Spec.Containers {
+						containers = append(containers, container.Name)
+					}
+					for _, container := range s.Spec.Template.Spec.InitContainers {
+						containers = append(containers, container.Name)
+					}
+				}
+			}
+		}
+	}
+
+	if resourceName != "" && (resourceKind == "daemonset" || resourceKind == "daemonsets" || resourceKind == "ds") {
+		if ds, ok := rc.daemonsets[namespace]; ok {
+			for _, d := range ds {
+				if d.Name == resourceName {
+					for _, container := range d.Spec.Template.Spec.Containers {
+						containers = append(containers, container.Name)
+					}
+					for _, container := range d.Spec.Template.Spec.InitContainers {
+						containers = append(containers, container.Name)
+					}
+				}
+			}
+		}
+	}
+
+	// Remove duplicates
+	seen := make(map[string]bool)
+	unique := make([]string, 0, len(containers))
+	for _, c := range containers {
+		if !seen[c] {
+			seen[c] = true
+			unique = append(unique, c)
+		}
+	}
+
+	return unique
 }
