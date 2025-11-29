@@ -2,8 +2,18 @@ package kubecomplete
 
 import (
 	"fmt"
+	"os"
 	"strings"
 )
+
+func debugLog(msg string) {
+	f, err := os.OpenFile("/tmp/purr-completer-debug.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	fmt.Fprintf(f, "%s\n", msg)
+}
 
 type Completer struct {
 	Registry *Registry
@@ -19,7 +29,10 @@ func NewCompleter(reg *Registry, cache ClusterCache) *Completer {
 
 // Complete is the main entry: pass the full line and cursor pos (byte offset).
 func (c *Completer) Complete(line string, cursor int, ctx CompletionContext) []Suggestion {
+	debugLog(fmt.Sprintf("=== Complete called: line=%q, cursor=%d ===", line, cursor))
+
 	if c.Registry == nil {
+		debugLog("Registry is nil, returning empty")
 		return nil
 	}
 	if cursor < 0 || cursor > len(line) {
@@ -33,19 +46,27 @@ func (c *Completer) Complete(line string, cursor int, ctx CompletionContext) []S
 	tokens := shellSplit(segment)
 	tokens = normalizeKubectl(tokens)
 
+	debugLog(fmt.Sprintf("tokens=%v, hasTrailingSpace=%v", tokens, hasTrailingSpace))
+
 	if len(tokens) == 0 {
+		debugLog("No tokens, suggesting top-level commands")
 		return c.suggestTopLevelCommands("")
 	}
 
 	cmd, pathLen := c.Registry.MatchCommand(tokens)
+	debugLog(fmt.Sprintf("MatchCommand result: cmd=%v, pathLen=%d", cmd != nil, pathLen))
+
 	if cmd == nil {
+		debugLog("No command match, checking for subcommands")
 		// No exact command match - check if we're building a subcommand
 		// e.g., "rollout " or "rollout" or "rollout re" should suggest subcommands
 		subcommands := c.suggestSubcommands(tokens)
+		debugLog(fmt.Sprintf("suggestSubcommands returned %d results", len(subcommands)))
 		if len(subcommands) > 0 {
 			return subcommands
 		}
 		// Otherwise suggest top-level command names
+		debugLog(fmt.Sprintf("No subcommands, suggesting top-level with prefix=%q", tokens[0]))
 		return c.suggestTopLevelCommands(tokens[0])
 	}
 
@@ -53,14 +74,17 @@ func (c *Completer) Complete(line string, cursor int, ctx CompletionContext) []S
 	// This handles cases like typing "rollout" where we match the command but
 	// subcommands exist that should be suggested
 	if !hasTrailingSpace && pathLen == len(tokens) {
+		debugLog("Checking for subcommands (complete command, no trailing space)")
 		// We matched a complete command but might have subcommands
 		subcommands := c.suggestSubcommands(tokens)
+		debugLog(fmt.Sprintf("suggestSubcommands returned %d results", len(subcommands)))
 		if len(subcommands) > 0 {
 			return subcommands
 		}
 	}
 
 	args := tokens[pathLen:] // after command path
+	debugLog(fmt.Sprintf("args=%v (tokens after command path)", args))
 
 	// Case 1: We're typing a flag value (e.g., "get pods -n d")
 	// Check if second-to-last arg is a flag and last arg is not a flag
@@ -68,6 +92,7 @@ func (c *Completer) Complete(line string, cursor int, ctx CompletionContext) []S
 		secondToLast := args[len(args)-2]
 		lastArg := args[len(args)-1]
 		if isFlagToken(secondToLast) && !isFlagToken(lastArg) {
+			debugLog(fmt.Sprintf("Typing flag value: flag=%s, value=%s", secondToLast, lastArg))
 			// We're typing a flag value - suggest completions for that flag
 			// Pass args without the partial value so suggestAfterFlag can identify the flag
 			return c.suggestAfterFlag(cmd, ctx, args[:len(args)-1], true)
@@ -76,10 +101,12 @@ func (c *Completer) Complete(line string, cursor int, ctx CompletionContext) []S
 
 	// Case 2: We just finished typing a flag and added space - suggest flag value
 	if hasTrailingSpace && len(args) > 0 && isFlagToken(args[len(args)-1]) {
+		debugLog(fmt.Sprintf("Just typed flag with space: %s", args[len(args)-1]))
 		return c.suggestAfterFlag(cmd, ctx, args, hasTrailingSpace)
 	}
 
 	// Case 3: Otherwise - suggest positionals and flags
+	debugLog("Calling suggestPositionalsAndFlags")
 	return c.suggestPositionalsAndFlags(cmd, ctx, args, hasTrailingSpace)
 }
 
@@ -389,29 +416,39 @@ func inferResourceKindFromArgs(cmd *CommandRuntime, args []string) string {
 func (c *Completer) suggestPositionalsAndFlags(cmd *CommandRuntime, ctx CompletionContext, args []string, hasTrailingSpace bool) []Suggestion {
 	spec := cmd.Spec
 
+	debugLog(fmt.Sprintf("suggestPositionalsAndFlags: args=%v, hasTrailingSpace=%v, numPositionals=%d", args, hasTrailingSpace, len(spec.Positionals)))
+
 	usedFlags := parseUsedFlags(cmd, args)
 	posIndex := countSatisfiedPositionals(spec.Positionals, cmd, args, hasTrailingSpace)
+
+	debugLog(fmt.Sprintf("posIndex=%d (satisfied positionals)", posIndex))
 
 	var out []Suggestion
 
 	// 1. Suggest next positional (if any)
 	if posIndex < len(spec.Positionals) {
 		td := &spec.Positionals[posIndex]
+		debugLog(fmt.Sprintf("Suggesting positional %d, kind=%s", posIndex, td.Kind))
 		out = append(out, c.suggestForPositional(cmd, ctx, td, args)...)
 	} else if posIndex > 0 && posIndex == len(spec.Positionals) {
+		debugLog("All positionals satisfied, checking for resource name suggestions")
 		// All positionals are satisfied, but if the first positional was a resource type,
 		// suggest resource names for that type (e.g., "rollout restart deployment" -> suggest deployment names)
 		firstPos := &spec.Positionals[0]
+		debugLog(fmt.Sprintf("First positional kind=%s", firstPos.Kind))
 		if firstPos.Kind == TokenResourceType || firstPos.Kind == TokenResourceName {
 			// Get the resource type from the first non-flag arg
 			resourceType := getFirstNonFlagArg(args)
+			debugLog(fmt.Sprintf("Resource type from args: %q", resourceType))
 			if resourceType != "" && c.Cache != nil {
 				// Extract namespace from flags if specified
 				ns := extractNamespaceFromArgs(cmd, args)
 				if ns == "" {
 					ns = ctx.CurrentNamespace
 				}
+				debugLog(fmt.Sprintf("Looking up resource names for type=%s, namespace=%s", resourceType, ns))
 				names := c.Cache.ResourceNames(resourceType, ns)
+				debugLog(fmt.Sprintf("Found %d resource names", len(names)))
 				for _, name := range names {
 					out = append(out, Suggestion{
 						Value:       name,
@@ -425,6 +462,7 @@ func (c *Completer) suggestPositionalsAndFlags(cmd *CommandRuntime, ctx Completi
 	}
 
 	// 2. Suggest flags (not yet used), with weighted scores
+	flagCount := 0
 	for primary, flag := range spec.Flags {
 		if usedFlags[primary] {
 			continue
@@ -435,7 +473,11 @@ func (c *Completer) suggestPositionalsAndFlags(cmd *CommandRuntime, ctx Completi
 			Description: flag.Description,
 			Score:       scoreFlag(flag),
 		})
+		flagCount++
 	}
+
+	debugLog(fmt.Sprintf("Added %d flags to suggestions", flagCount))
+	debugLog(fmt.Sprintf("Total suggestions before sort: %d", len(out)))
 
 	sortSuggestions(out)
 	return out
