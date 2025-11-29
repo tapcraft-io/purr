@@ -593,8 +593,24 @@ func (c *Completer) suggestForPositional(cmd *CommandRuntime, ctx CompletionCont
 			return c.suggestResourceTypes(cmd, ctx, td)
 		}
 
-		debugLog(fmt.Sprintf("Suggesting resource names for kind=%q, namespace=%q", kind, ctx.CurrentNamespace))
-		return c.suggestResourceNames(ctx, kind, ctx.CurrentNamespace, td)
+		// Extract namespace from flags if specified, fallback to context
+		ns := extractNamespaceFromArgs(cmd, args)
+		if ns == "" {
+			ns = ctx.CurrentNamespace
+		}
+
+		debugLog(fmt.Sprintf("Suggesting resource names for kind=%q, namespace=%q", kind, ns))
+		return c.suggestResourceNames(ctx, kind, ns, td)
+	case TokenResourceTarget:
+		// resource-target is a flexible token that accepts TYPE/NAME or just NAME
+		// For commands like "logs", it accepts pod names directly or type/name format
+		ns := extractNamespaceFromArgs(cmd, args)
+		if ns == "" {
+			ns = ctx.CurrentNamespace
+		}
+		debugLog(fmt.Sprintf("TokenResourceTarget: suggesting pods for namespace=%q", ns))
+		// Default to pods for logs-like commands (role is "pod-or-workload")
+		return c.suggestResourceNames(ctx, "pod", ns, td)
 	case TokenNamespace:
 		return c.suggestNamespaces(ctx)
 	case TokenContainerName:
