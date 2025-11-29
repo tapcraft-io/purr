@@ -40,12 +40,10 @@ func (c *Completer) Complete(line string, cursor int, ctx CompletionContext) []S
 	cmd, pathLen := c.Registry.MatchCommand(tokens)
 	if cmd == nil {
 		// No exact command match - check if we're building a subcommand
-		// e.g., "rollout " should suggest subcommands like "restart", "status"
-		if hasTrailingSpace {
-			subcommands := c.suggestSubcommands(tokens)
-			if len(subcommands) > 0 {
-				return subcommands
-			}
+		// e.g., "rollout " or "rollout" or "rollout re" should suggest subcommands
+		subcommands := c.suggestSubcommands(tokens)
+		if len(subcommands) > 0 {
+			return subcommands
 		}
 		// Otherwise suggest top-level command names
 		return c.suggestTopLevelCommands(tokens[0])
@@ -58,8 +56,6 @@ func (c *Completer) Complete(line string, cursor int, ctx CompletionContext) []S
 		// We matched a complete command but might have subcommands
 		subcommands := c.suggestSubcommands(tokens)
 		if len(subcommands) > 0 {
-			// Return both subcommands and positionals/flags
-			// Subcommands will be scored higher
 			return subcommands
 		}
 	}
@@ -121,6 +117,7 @@ func (c *Completer) suggestTopLevelCommands(prefix string) []Suggestion {
 
 // suggestSubcommands suggests the next part of a multi-part command
 // e.g., for ["rollout"], suggest ["restart", "status", "pause", ...]
+// Handles partial matches: ["rollout", "re"] suggests "restart"
 func (c *Completer) suggestSubcommands(tokens []string) []Suggestion {
 	if c.Registry == nil || len(tokens) == 0 {
 		return nil
@@ -129,32 +126,58 @@ func (c *Completer) suggestSubcommands(tokens []string) []Suggestion {
 	seen := make(map[string]bool)
 	var out []Suggestion
 
-	// Look through all commands to find ones that start with our tokens
+	// Check all commands in registry
+	// For "rollout re", we match commands starting with "rollout" and filter by "re" prefix
 	for _, cmd := range c.Registry.Commands {
-		if len(cmd.Spec.Path) <= len(tokens) {
+		if len(cmd.Spec.Path) < len(tokens) {
 			continue
 		}
 
-		// Check if this command's path starts with our tokens
-		matches := true
-		for i, tok := range tokens {
-			if i >= len(cmd.Spec.Path) || cmd.Spec.Path[i] != tok {
-				matches = false
+		// Try exact match first (all tokens must match exactly)
+		exactMatch := true
+		for i := 0; i < len(tokens)-1; i++ {
+			if i >= len(cmd.Spec.Path) || cmd.Spec.Path[i] != tokens[i] {
+				exactMatch = false
 				break
 			}
 		}
 
-		if matches {
-			// Suggest the next token in the path
-			nextToken := cmd.Spec.Path[len(tokens)]
-			if !seen[nextToken] {
-				seen[nextToken] = true
-				out = append(out, Suggestion{
-					Value:       nextToken,
-					Kind:        SuggestCommand,
-					Description: "",
-					Score:       50,
-				})
+		if !exactMatch {
+			continue
+		}
+
+		// For the last token, try both exact and prefix match
+		lastIdx := len(tokens) - 1
+		lastToken := tokens[lastIdx]
+
+		if lastIdx < len(cmd.Spec.Path) {
+			pathToken := cmd.Spec.Path[lastIdx]
+
+			// Exact match - suggest next token
+			if pathToken == lastToken {
+				if len(cmd.Spec.Path) > len(tokens) {
+					nextToken := cmd.Spec.Path[len(tokens)]
+					if !seen[nextToken] {
+						seen[nextToken] = true
+						out = append(out, Suggestion{
+							Value:       nextToken,
+							Kind:        SuggestCommand,
+							Description: "",
+							Score:       50,
+						})
+					}
+				}
+			} else if strings.HasPrefix(pathToken, lastToken) {
+				// Prefix match - suggest this token
+				if !seen[pathToken] {
+					seen[pathToken] = true
+					out = append(out, Suggestion{
+						Value:       pathToken,
+						Kind:        SuggestCommand,
+						Description: "",
+						Score:       scorePrefix(pathToken, lastToken),
+					})
+				}
 			}
 		}
 	}
@@ -375,6 +398,30 @@ func (c *Completer) suggestPositionalsAndFlags(cmd *CommandRuntime, ctx Completi
 	if posIndex < len(spec.Positionals) {
 		td := &spec.Positionals[posIndex]
 		out = append(out, c.suggestForPositional(cmd, ctx, td, args)...)
+	} else if posIndex > 0 && posIndex == len(spec.Positionals) {
+		// All positionals are satisfied, but if the first positional was a resource type,
+		// suggest resource names for that type (e.g., "rollout restart deployment" -> suggest deployment names)
+		firstPos := &spec.Positionals[0]
+		if firstPos.Kind == TokenResourceType || firstPos.Kind == TokenResourceName {
+			// Get the resource type from the first non-flag arg
+			resourceType := getFirstNonFlagArg(args)
+			if resourceType != "" && c.Cache != nil {
+				// Extract namespace from flags if specified
+				ns := extractNamespaceFromArgs(cmd, args)
+				if ns == "" {
+					ns = ctx.CurrentNamespace
+				}
+				names := c.Cache.ResourceNames(resourceType, ns)
+				for _, name := range names {
+					out = append(out, Suggestion{
+						Value:       name,
+						Kind:        SuggestResourceName,
+						Description: fmt.Sprintf("%s in %s", resourceType, ns),
+						Score:       55, // Higher than flags
+					})
+				}
+			}
+		}
 	}
 
 	// 2. Suggest flags (not yet used), with weighted scores
@@ -392,6 +439,35 @@ func (c *Completer) suggestPositionalsAndFlags(cmd *CommandRuntime, ctx Completi
 
 	sortSuggestions(out)
 	return out
+}
+
+// getFirstNonFlagArg returns the first argument that isn't a flag or flag value
+func getFirstNonFlagArg(args []string) string {
+	i := 0
+	for i < len(args) {
+		if !isFlagToken(args[i]) {
+			return args[i]
+		}
+		// Skip flag and potentially its value
+		if i+1 < len(args) && !isFlagToken(args[i+1]) {
+			i += 2
+		} else {
+			i++
+		}
+	}
+	return ""
+}
+
+// extractNamespaceFromArgs extracts the namespace value from -n or --namespace flags
+func extractNamespaceFromArgs(cmd *CommandRuntime, args []string) string {
+	for i := 0; i < len(args); i++ {
+		if args[i] == "-n" || args[i] == "--namespace" {
+			if i+1 < len(args) && !isFlagToken(args[i+1]) {
+				return args[i+1]
+			}
+		}
+	}
+	return ""
 }
 
 func parseUsedFlags(cmd *CommandRuntime, args []string) map[string]bool {
