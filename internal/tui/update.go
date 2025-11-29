@@ -155,6 +155,33 @@ func (m Model) handleTypingMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	switch msg.String() {
+	case "tab", "right":
+		// Accept the top suggestion
+		if len(m.suggestions) > 0 {
+			currentInput := m.commandInput.Value()
+			suggestion := m.suggestions[0]
+
+			// Determine how to append the suggestion
+			if len(currentInput) > 0 && currentInput[len(currentInput)-1] != ' ' {
+				// Replace the last partial token with the suggestion
+				tokens := strings.Fields(strings.TrimSpace(currentInput))
+				if len(tokens) > 0 {
+					// Remove last partial token and add suggestion
+					prefix := strings.TrimSuffix(currentInput, tokens[len(tokens)-1])
+					m.commandInput.SetValue(prefix + suggestion + " ")
+				}
+			} else {
+				// Append suggestion after the space
+				m.commandInput.SetValue(currentInput + suggestion + " ")
+			}
+			m.commandInput.CursorEnd()
+
+			// Update suggestions for new input
+			m.suggestions = m.getAutocompleteSuggestions(m.commandInput.Value())
+			m.commandInput.SetSuggestions(m.suggestions)
+		}
+		return m, nil
+
 	case "enter":
 		command, isShell, err := m.prepareCommand(m.commandInput.Value())
 		if err != nil {

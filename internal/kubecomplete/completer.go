@@ -51,14 +51,38 @@ func (c *Completer) Complete(line string, cursor int, ctx CompletionContext) []S
 		return c.suggestTopLevelCommands(tokens[0])
 	}
 
+	// Check if there are subcommands available (e.g., "rollout" -> "rollout restart")
+	// This handles cases like typing "rollout" where we match the command but
+	// subcommands exist that should be suggested
+	if !hasTrailingSpace && pathLen == len(tokens) {
+		// We matched a complete command but might have subcommands
+		subcommands := c.suggestSubcommands(tokens)
+		if len(subcommands) > 0 {
+			// Return both subcommands and positionals/flags
+			// Subcommands will be scored higher
+			return subcommands
+		}
+	}
+
 	args := tokens[pathLen:] // after command path
 
-	// Case 1: We just finished typing a flag and added space - suggest flag value
+	// Case 1: We're typing a flag value (e.g., "get pods -n d")
+	// Check if second-to-last arg is a flag and last arg is not a flag
+	if !hasTrailingSpace && len(args) >= 2 {
+		secondToLast := args[len(args)-2]
+		lastArg := args[len(args)-1]
+		if isFlagToken(secondToLast) && !isFlagToken(lastArg) {
+			// We're typing a flag value - suggest completions for that flag
+			// Pass args without the partial value so suggestAfterFlag can identify the flag
+			return c.suggestAfterFlag(cmd, ctx, args[:len(args)-1], true)
+		}
+	}
+
+	// Case 2: We just finished typing a flag and added space - suggest flag value
 	if hasTrailingSpace && len(args) > 0 && isFlagToken(args[len(args)-1]) {
 		return c.suggestAfterFlag(cmd, ctx, args, hasTrailingSpace)
 	}
 
-	// Case 2: We're typing a flag (no trailing space) - this will be handled by positionals+flags
 	// Case 3: Otherwise - suggest positionals and flags
 	return c.suggestPositionalsAndFlags(cmd, ctx, args, hasTrailingSpace)
 }
