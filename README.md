@@ -1,42 +1,44 @@
 # Purr 🐱
 
-[![Go Version](https://img.shields.io/badge/Go-1.22+-00ADD8?style=flat&logo=go)](https://golang.org)
+[![Go Version](https://img.shields.io/badge/Go-1.24+-00ADD8?style=flat&logo=go)](https://golang.org)
 [![Tests](https://img.shields.io/badge/tests-passing-brightgreen)](https://github.com/tapcraft-io/purr)
-[![Coverage](https://img.shields.io/badge/coverage-90%25-green)](https://github.com/tapcraft-io/purr)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 A beautiful TUI (Text User Interface) wrapper for kubectl that maintains 100% feature parity while adding quality-of-life improvements through intelligent completion, resource caching, and elegant design.
 
-```
-┌─ Purr ─────────────────────── [context: production] ─┐
-│                                                       │
-│  > kubectl get pods█                                  │
-│                                                       │
-│  ┌─ Select Namespace ──────────────────────┐         │
-│  │ Search: pro█                             │         │
-│  ├──────────────────────────────────────────┤         │
-│  │ ❯ production (last used)                 │         │
-│  │   staging                                │         │
-│  │   development                            │         │
-│  │   default                                │         │
-│  └──────────────────────────────────────────┘         │
-│                                                       │
-│  [Tab] autocomplete  [Ctrl+R] history  [Ctrl+C] quit │
-└───────────────────────────────────────────────────────┘
-```
+![Initial Screen](image.png)
 
 ## Features
 
-✨ **100% kubectl Compatible** - Every kubectl command works identically
-🚀 **Smart Completions** - Interactive pickers for namespaces, resources, and files
-💾 **Resource Caching** - Background refresh every 30s for instant lookups
-📜 **Command History** - Persistent history with fuzzy search (Ctrl+R)
-🎨 **Beautiful UI** - Elegant design with Charm's Bubble Tea & Lipgloss
-⚡ **Zero Friction** - Enhances kubectl without changing your workflow
-🔒 **Safety First** - Confirmation dialogs for destructive operations
-⚡ **Fast** - 90%+ test coverage, concurrent-safe caching
+✨ **100% kubectl Compatible** - Every kubectl command works identically  
+🚀 **Smart Completions** - Interactive suggestions for commands, resources, and namespaces  
+💾 **Real-time Caching** - Watch-based updates with 5-minute fallback refresh  
+📜 **Command History** - Persistent history with fuzzy search (Ctrl+R)  
+🎨 **Beautiful UI** - Elegant design with Charm's Bubble Tea & Lipgloss  
+⚡ **Shell Commands** - Run any shell command directly (non-kubectl commands execute as shell)  
+📁 **File Picker** - Type `@` to browse and select files  
+🔒 **Safety First** - Confirmation dialogs for destructive operations  
+🎮 **Demo Mode** - Try without a cluster using `--demo`
 
 ## Installation
+
+### From Releases
+
+Download the latest binary for your platform from the [Releases page](https://github.com/tapcraft-io/purr/releases).
+
+```bash
+# Linux (amd64)
+curl -LO https://github.com/tapcraft-io/purr/releases/latest/download/purr-linux-amd64.tar.gz
+tar -xzf purr-linux-amd64.tar.gz
+sudo mv purr-linux-amd64 /usr/local/bin/purr
+
+# macOS (Apple Silicon)
+curl -LO https://github.com/tapcraft-io/purr/releases/latest/download/purr-darwin-arm64.tar.gz
+tar -xzf purr-darwin-arm64.tar.gz
+sudo mv purr-darwin-arm64 /usr/local/bin/purr
+
+# Windows - download the .zip from releases and add to PATH
+```
 
 ### From Source
 
@@ -63,95 +65,41 @@ purr
 
 Purr will use your existing kubectl configuration and context.
 
+### Demo Mode
+
+Try Purr without a Kubernetes cluster:
+
+```bash
+purr --demo
+```
+
+### Check Version
+
+```bash
+purr --version
+```
+
 ## Demo
 
 ### Main Interface
 Type any kubectl command and enjoy enhanced autocomplete:
 
-```
-┌─ Purr ────────────────── [context: prod] ─────┐
-│                                               │
-│  > kubectl get pods -n production             │
-│                                               │
-│  ┌─ Output ──────────────────────────────┐   │
-│  │ $ kubectl get pods -n production      │   │
-│  │                                        │   │
-│  │ NAME              READY   STATUS   AGE │   │
-│  │ api-server-abc    1/1     Running  2d  │   │
-│  │ worker-xyz        1/1     Running  1d  │   │
-│  │ cache-123         1/1     Running  3h  │   │
-│  └────────────────────────────────────────┘   │
-│                                               │
-│  ✓ Command succeeded                          │
-│                                               │
-│  [n] new  [r] re-run  [e] edit  [Ctrl+C] quit │
-└───────────────────────────────────────────────┘
-```
+![Json output and autocomplete](image-2.png)
 
 ### Resource Picker
 Press `Tab` after typing a resource type to browse available resources:
 
-```
-┌─ Purr ────────────────── [context: prod] ─────┐
-│                                               │
-│  > kubectl describe pod                       │
-│                                               │
-│  ┌─ Select pods ────────────────────────┐    │
-│  │ Search: api█                         │    │
-│  ├──────────────────────────────────────┤    │
-│  │ ● api-server-abc                     │    │
-│  │   Status: Running | Age: 2d | ...    │    │
-│  │                                      │    │
-│  │   api-server-def                     │    │
-│  │   Status: Running | Age: 1d | ...    │    │
-│  │                                      │    │
-│  │   worker-api-001                     │    │
-│  │   Status: Running | Age: 12h | ...   │    │
-│  └──────────────────────────────────────┘    │
-│                                               │
-│  [↑↓] navigate  [Enter] select  [/] filter   │
-└───────────────────────────────────────────────┘
-```
+![Cached resources](image-3.png)
 
 ### Command History (Ctrl+R)
 Search through your command history with fuzzy matching:
 
-```
-┌─ Purr ────────────────── [context: prod] ─────┐
-│                                               │
-│  ┌─ Command History ────────────────────┐    │
-│  │ Search: deploy█                      │    │
-│  ├──────────────────────────────────────┤    │
-│  │ ❯ kubectl get deployments -n prod   │    │
-│  │   2024-01-15 14:30 | prod/default   │    │
-│  │                                      │    │
-│  │   kubectl rollout restart deploy... │    │
-│  │   2024-01-15 12:15 | prod/default   │    │
-│  │                                      │    │
-│  │   kubectl apply -f deployment.yaml  │    │
-│  │   2024-01-14 16:45 | prod/default   │    │
-│  └──────────────────────────────────────┘    │
-│                                               │
-│  [Enter] run  [e] edit  [Esc] cancel         │
-└───────────────────────────────────────────────┘
-```
+![History](image-4.png)
 
-### Safety Confirmation
-Destructive operations require confirmation:
+### Easy file picker
+Just use @ to reference any file in the working directory
 
-```
-┌─ Purr ────────────────── [context: prod] ─────┐
-│                                               │
-│  ⚠ Destructive Operation                      │
-│                                               │
-│  Command: kubectl delete deployment api-srv   │
-│                                               │
-│  This command may delete or modify resources. │
-│  Are you sure you want to continue?          │
-│                                               │
-│  [y] yes  [n] no                              │
-└───────────────────────────────────────────────┘
-```
+![File picker](image-5.png)
 
 ## Usage
 
@@ -169,93 +117,92 @@ Just type kubectl commands as you normally would:
 
 ### Smart Features
 
+#### Autocomplete Suggestions
+
+Suggestions appear as you type. Use `↑/↓` or `Ctrl+N/Ctrl+P` to cycle through them, then `Tab` to accept:
+
+```
+> kubectl get [suggestions appear automatically]
+```
+
 #### Namespace Completion
 
-Type `-n ` or `--namespace ` and press `Tab` to see a list of all namespaces:
+Type `-n ` or `--namespace ` and suggestions will show available namespaces:
 
 ```
-> kubectl get pods -n [Tab]
+> kubectl get pods -n [namespace suggestions appear]
 ```
-
-A picker will appear with all available namespaces. Use arrow keys to navigate and Enter to select.
 
 #### Resource Completion
 
-After specifying a resource type, press `Tab` to see available resources:
+After specifying a resource type, suggestions show available resources:
 
 ```
-> kubectl get pods [Tab]
+> kubectl get pods [pod name suggestions appear]
 ```
-
-You'll see a list of all pods in the current/specified namespace with their status and age.
 
 #### File Picker
 
-Type `@` or use `-f ` flag to open a file picker:
+Type `@` to open an interactive file picker for selecting YAML/JSON files:
 
 ```
-> kubectl apply -f @
+> kubectl apply -f @[file picker opens]
 ```
 
-Navigate through your filesystem to select YAML/JSON files.
+Navigate through your filesystem and press Enter to select.
+
+#### Shell Commands
+
+Non-kubectl commands are executed directly as shell commands:
+
+```
+> ls -la
+> cat deployment.yaml
+> grep -r "nginx" .
+```
 
 #### Command History
 
-Press `Ctrl+R` to search through your command history:
+Press `Ctrl+R` to search through your command history with fuzzy matching.
 
-- Navigate with arrow keys
-- Press `Enter` to execute
-- Press `e` to edit before executing
-- Fuzzy search by typing
+#### Built-in Commands
+
+- `clear` or `cls` - Clear the screen
+- `exit` or `quit` - Exit Purr
 
 ### Keybindings
 
 #### Global
-- `Ctrl+C` or `q` - Quit (from output view)
+- `Ctrl+C` (twice) - Quit
 - `Ctrl+L` - Clear screen
 - `Ctrl+R` - Open command history
+- `Ctrl+O` - View full output (when output is truncated)
 - `Esc` - Cancel/Go back
 
 #### Typing Mode
-- `Tab` - Autocomplete / Show suggestions
+- `Tab` or `→` - Accept suggestion
+- `↑/↓` or `Ctrl+P/N` - Cycle through suggestions
 - `Enter` - Execute command
-- `Ctrl+U` - Clear line
-- `Ctrl+W` - Delete word
+- `@` - Open file picker
 
-#### Selection Mode (Pickers)
-- `↑/↓` or `j/k` - Navigate
-- `/` - Search/Filter
-- `Enter` - Select
+#### History Mode
+- `↑/↓` - Navigate history
+- `Enter` - Execute selected command
+- `/` - Filter history
 - `Esc` - Cancel
 
-#### Output Mode
-- `↑/↓` or `j/k` - Scroll
-- `n` - New command
-- `r` - Re-run last command
-- `e` - Edit and re-run
-- `q` or `Ctrl+C` - Return to typing
+#### File Picker Mode
+- `↑/↓` - Navigate files
+- `Enter` - Select file
+- `Esc` - Cancel
 
 ## Configuration
 
-Purr stores its configuration in `~/.purr/`:
+Purr stores its data in `~/.purr/`:
 
-```yaml
-# ~/.purr/config.yaml
-preferences:
-  default_namespace: default
-  history_size: 1000
-  cache_ttl: 30s
-  confirm_destructive: true
+- `~/.purr/history.json` - Command history (persists across sessions)
 
-ui:
-  theme: dark
-  show_help: true
-  compact_mode: false
-```
-
-### History
-
-Command history is stored in `~/.purr/history.json` and persists across sessions.
+Purr uses your existing kubectl configuration from `~/.kube/config` or the `KUBECONFIG` environment variable.
 
 ## Supported kubectl Commands
 
@@ -290,39 +237,19 @@ purr/
 
 ## Requirements
 
-- Go 1.22 or higher
+- Go 1.24 or higher (for building from source)
 - kubectl installed and configured
-- Access to a Kubernetes cluster
-
-## Development
-
-### Building
-
-```bash
-make build
-```
-
-### Running Tests
-
-```bash
-make test
-```
-
-### Running Locally
-
-```bash
-make run
-```
+- Access to a Kubernetes cluster (or use `--demo` mode)
 
 ## Why Purr?
 
-kubectl is powerful but typing resource names, namespaces, and paths repeatedly can be tedious. Purr enhances kubectl with smart completions while maintaining 100% compatibility. You get:
+kubectl is powerful but typing resource names, namespaces, and paths repeatedly can be tedious. Purr enhances kubectl with smart completions while maintaining 100% compatibility:
 
 - **No learning curve** - Use kubectl commands you already know
-- **Speed boost** - Quick resource selection instead of typing names
-- **Safety** - Confirmation dialogs for destructive operations
+- **Speed boost** - Quick resource suggestions instead of typing names
+- **Shell integration** - Run any command, not just kubectl
 - **History** - Never lose that complex command you ran last week
-- **Beauty** - A pleasant terminal experience
+- **Beauty** - Powered by the charm ecosystem, purr is pure eye candy
 
 ## Comparison with kubectl
 
@@ -331,37 +258,13 @@ kubectl is powerful but typing resource names, namespaces, and paths repeatedly 
 | All commands | ✅ | ✅ |
 | Direct execution | ✅ | ✅ |
 | Autocomplete | Shell-dependent | ✅ Built-in |
-| Resource browsing | ❌ | ✅ Interactive |
-| History search | Shell-dependent | ✅ Built-in |
-| Visual feedback | Basic | ✅ Rich |
-| Destructive confirmations | ❌ | ✅ Optional |
+| Resource suggestions | ❌ | ✅ Real-time |
+| History search | Shell-dependent | ✅ Built-in fuzzy |
+| File picker | ❌ | ✅ Interactive |
+| Shell commands | Separate terminal | ✅ Integrated |
+| Demo mode | ❌ | ✅ --demo |
 
 ## Development & Testing
-
-### Running Tests
-
-Purr has comprehensive test coverage for core components:
-
-```bash
-# Run all tests
-make test
-
-# Run tests with coverage
-go test -cover ./...
-
-# Run tests verbosely
-go test -v ./pkg/types/... ./internal/exec/... ./internal/history/...
-```
-
-### Test Coverage
-
-```
-✓ pkg/types        100.0% coverage
-✓ internal/exec     74.1% coverage
-✓ internal/history  97.5% coverage
-─────────────────────────────────
-  Overall:          ~90% coverage
-```
 
 ### Building
 
@@ -369,14 +272,21 @@ go test -v ./pkg/types/... ./internal/exec/... ./internal/history/...
 # Build for current platform
 make build
 
-# Build for all platforms
-make build-all
-
-# Install locally
-make install
-
 # Run without installing
 make run
+
+# Run in demo mode
+go run ./cmd/purr --demo
+```
+
+### Running Tests
+
+```bash
+# Run all tests
+make test
+
+# Run tests with verbose output
+go test -v ./...
 ```
 
 ### Project Structure
@@ -388,14 +298,19 @@ purr/
 ├── internal/
 │   ├── tui/              # Bubble Tea UI components
 │   │   ├── model.go      # Application state
-│   │   ├── update.go     # Event handling & updates
+│   │   ├── update.go     # Event handling & key bindings
 │   │   ├── view.go       # Rendering logic
 │   │   └── styles.go     # Lipgloss styling
 │   ├── k8s/              # Kubernetes client & cache
 │   │   ├── client.go     # K8s client initialization
-│   │   └── cache.go      # Resource caching with watch
-│   ├── exec/             # kubectl execution
-│   │   ├── kubectl.go    # Command executor
+│   │   ├── cache.go      # Resource caching with watchers
+│   │   └── mock_cache.go # Demo mode mock data
+│   ├── kubecomplete/     # Autocomplete engine
+│   │   ├── completer.go  # Suggestion logic
+│   │   ├── registry.go   # Command definitions
+│   │   └── types.go      # Completion types
+│   ├── exec/             # Command execution
+│   │   ├── kubectl.go    # kubectl executor
 │   │   └── parser.go     # Command parser
 │   ├── history/          # Command history
 │   │   └── history.go    # Persistent history with search
