@@ -56,10 +56,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.history != nil {
 			_ = m.history.Save()
 		}
-		// Auto-return to typing mode with cleared input
+		// Return to typing mode with cleared input and suggestions - output remains visible
 		m.mode = types.ModeTyping
 		m.commandInput.SetValue("")
 		m.commandInput.Focus()
+		// Reset suggestions to default commands
+		m.suggestions = []string{"get", "describe", "logs", "apply", "delete", "exec", "create", "rollout", "scale"}
+		m.suggestionIndex = 0
+		m.commandInput.SetSuggestions(m.suggestions)
 
 	case errMsg:
 		m.err = msg.err
@@ -78,6 +82,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case types.ModeSelectingResource:
 		m.resourceList, cmd = m.resourceList.Update(msg)
+		cmds = append(cmds, cmd)
+
+	case types.ModeSelectingFile:
+		m.filePicker, cmd = m.filePicker.Update(msg)
 		cmds = append(cmds, cmd)
 
 	case types.ModeViewingHistory:
@@ -135,6 +143,9 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case types.ModeSelectingResource:
 		return m.handleSelectingResourceMode(msg)
 
+	case types.ModeSelectingFile:
+		return m.handleSelectingFileMode(msg)
+
 	case types.ModeViewingHistory:
 		return m.handleViewingHistoryMode(msg)
 
@@ -156,10 +167,10 @@ func (m Model) handleTypingMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.String() {
 	case "tab", "right":
-		// Accept the top suggestion
-		if len(m.suggestions) > 0 {
+		// Accept the currently selected suggestion
+		if len(m.suggestions) > 0 && m.suggestionIndex < len(m.suggestions) {
 			currentInput := m.commandInput.Value()
-			suggestion := m.suggestions[0]
+			suggestion := m.suggestions[m.suggestionIndex]
 
 			// Determine how to append the suggestion
 			if len(currentInput) > 0 && currentInput[len(currentInput)-1] != ' ' {
@@ -176,13 +187,34 @@ func (m Model) handleTypingMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			m.commandInput.CursorEnd()
 
-			// Update suggestions for new input
+			// Update suggestions for new input and reset index
 			m.suggestions = m.getAutocompleteSuggestions(m.commandInput.Value())
+			m.suggestionIndex = 0
 			m.commandInput.SetSuggestions(m.suggestions)
 		}
 		return m, nil
 
 	case "enter":
+		inputValue := strings.TrimSpace(m.commandInput.Value())
+
+		// Handle built-in commands
+		if inputValue == "clear" || inputValue == "cls" {
+			// Clear screen - same as Ctrl+L
+			m.cmdOutput = ""
+			m.viewport.SetContent("")
+			m.commandInput.SetValue("")
+			m.suggestionIndex = 0
+			m.suggestions = []string{"get", "describe", "logs", "apply", "delete", "exec", "create", "rollout", "scale"}
+			m.commandInput.SetSuggestions(m.suggestions)
+			m.statusMsg = ""
+			return m, nil
+		}
+
+		if inputValue == "exit" || inputValue == "quit" {
+			m.quitting = true
+			return m, tea.Quit
+		}
+
 		command, isShell, err := m.prepareCommand(m.commandInput.Value())
 		if err != nil {
 			m.statusMsg = err.Error()
@@ -213,13 +245,45 @@ func (m Model) handleTypingMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case "ctrl+o":
+		// View full output
+		if m.cmdOutput != "" {
+			m.mode = types.ModeViewingOutput
+		}
+		return m, nil
+
 	case "ctrl+l":
 		// Clear screen
 		m.cmdOutput = ""
 		m.viewport.SetContent("")
 		m.commandInput.SetValue("")
+		m.suggestionIndex = 0
 		m.commandInput.SetSuggestions([]string{"get", "describe", "logs", "apply", "delete", "exec", "create", "rollout", "scale"})
 		return m, nil
+
+	case "down", "ctrl+n":
+		// Cycle to next suggestion
+		if len(m.suggestions) > 0 {
+			m.suggestionIndex++
+			if m.suggestionIndex >= len(m.suggestions) {
+				m.suggestionIndex = 0
+			}
+		}
+		return m, nil
+
+	case "up", "ctrl+p":
+		// Cycle to previous suggestion
+		if len(m.suggestions) > 0 {
+			m.suggestionIndex--
+			if m.suggestionIndex < 0 {
+				m.suggestionIndex = len(m.suggestions) - 1
+			}
+		}
+		return m, nil
+
+	case "@":
+		// Open file picker
+		return m.showFilePicker()
 
 	case "ctrl+space":
 		// Show resource/namespace picker if applicable
@@ -250,8 +314,13 @@ func (m Model) handleTypingMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	cmds = append(cmds, cmd)
 
 	// Update autocomplete suggestions after every keystroke
-	m.suggestions = m.getAutocompleteSuggestions(m.commandInput.Value())
-	// Still set them on the textinput for its built-in dropdown
+	newSuggestions := m.getAutocompleteSuggestions(m.commandInput.Value())
+	// Reset index if suggestions changed
+	if len(newSuggestions) != len(m.suggestions) || (len(newSuggestions) > 0 && len(m.suggestions) > 0 && newSuggestions[0] != m.suggestions[0]) {
+		m.suggestionIndex = 0
+	}
+	m.suggestions = newSuggestions
+	// Still set them on the textinput for its built-in ghost text
 	m.commandInput.SetSuggestions(m.suggestions)
 
 	return m, tea.Batch(cmds...)
@@ -328,8 +397,10 @@ func (m Model) handleViewingHistoryMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // handleViewingOutputMode handles key presses in output viewing mode
 func (m Model) handleViewingOutputMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "n", "q":
-		// New command
+	case "n", "q", "esc":
+		// New command - clear output and return to typing
+		m.cmdOutput = ""
+		m.viewport.SetContent("")
 		m.mode = types.ModeTyping
 		m.commandInput.Focus()
 		m.commandInput.SetValue("")
@@ -345,15 +416,12 @@ func (m Model) handleViewingOutputMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "e":
 		// Edit and re-run
 		if m.lastCmd != "" {
+			m.cmdOutput = ""
+			m.viewport.SetContent("")
 			m.commandInput.SetValue(m.lastCmd)
 			m.mode = types.ModeTyping
 			m.commandInput.Focus()
 		}
-		return m, nil
-
-	case "esc":
-		m.mode = types.ModeTyping
-		m.commandInput.Focus()
 		return m, nil
 	}
 
@@ -370,20 +438,57 @@ func (m Model) prepareCommand(raw string) (string, bool, error) {
 		return "", false, fmt.Errorf("please enter a command")
 	}
 
+	// Explicit shell command with ! prefix
 	if strings.HasPrefix(trimmed, "!") {
 		shell := strings.TrimSpace(strings.TrimPrefix(trimmed, "!"))
 		if shell == "" {
 			return "", true, fmt.Errorf("shell command cannot be empty")
 		}
-
 		return "!" + shell, true, nil
 	}
 
+	// Already has kubectl prefix
 	if strings.HasPrefix(trimmed, "kubectl") {
 		return trimmed, false, nil
 	}
 
-	return "kubectl " + trimmed, false, nil
+	// Check if the first word is a kubectl verb
+	firstWord := strings.Fields(trimmed)[0]
+	if m.isKubectlVerb(firstWord) {
+		return "kubectl " + trimmed, false, nil
+	}
+
+	// Not a kubectl verb - run as shell command
+	return "!" + trimmed, true, nil
+}
+
+// isKubectlVerb checks if the given word is a valid kubectl command/verb
+func (m Model) isKubectlVerb(word string) bool {
+	if m.completer == nil || m.completer.Registry == nil {
+		// Fallback to common verbs if completer not available
+		commonVerbs := map[string]bool{
+			"get": true, "describe": true, "create": true, "delete": true,
+			"apply": true, "edit": true, "logs": true, "exec": true,
+			"port-forward": true, "proxy": true, "cp": true, "attach": true,
+			"run": true, "expose": true, "set": true, "explain": true,
+			"scale": true, "autoscale": true, "rollout": true, "label": true,
+			"annotate": true, "config": true, "cluster-info": true, "top": true,
+			"cordon": true, "uncordon": true, "drain": true, "taint": true,
+			"certificate": true, "auth": true, "diff": true, "patch": true,
+			"replace": true, "wait": true, "kustomize": true, "api-resources": true,
+			"api-versions": true, "version": true, "plugin": true, "debug": true,
+		}
+		return commonVerbs[word]
+	}
+
+	// Check against the registry's known commands
+	topLevelCmds := m.completer.Registry.TopLevelCommands()
+	for _, cmd := range topLevelCmds {
+		if cmd == word {
+			return true
+		}
+	}
+	return false
 }
 
 // showNamespacePicker shows the namespace picker
@@ -426,6 +531,46 @@ func (m Model) showResourcePicker(resourceType, namespace string) (tea.Model, te
 	m.resourceList.SetItems(convertToListItems(items))
 	m.mode = types.ModeSelectingResource
 	return m, nil
+}
+
+// showFilePicker opens the file picker dialog
+func (m Model) showFilePicker() (tea.Model, tea.Cmd) {
+	m.mode = types.ModeSelectingFile
+	return m, m.filePicker.Init()
+}
+
+// handleSelectingFileMode handles key presses in file selection mode
+func (m Model) handleSelectingFileMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.mode = types.ModeTyping
+		m.commandInput.Focus()
+		return m, nil
+	}
+
+	// Let the filepicker handle its own keys
+	var cmd tea.Cmd
+	m.filePicker, cmd = m.filePicker.Update(msg)
+
+	// Check if a file was selected
+	if didSelect, path := m.filePicker.DidSelectFile(msg); didSelect {
+		// Insert the file path into the command
+		currentCmd := m.commandInput.Value()
+		m.commandInput.SetValue(currentCmd + path)
+		m.commandInput.CursorEnd()
+
+		// Return to typing mode
+		m.mode = types.ModeTyping
+		m.commandInput.Focus()
+		return m, nil
+	}
+
+	// Check if user tried to select a disabled file
+	if didSelect, _ := m.filePicker.DidSelectDisabledFile(msg); didSelect {
+		m.statusMsg = "Cannot select this file type"
+	}
+
+	return m, cmd
 }
 
 // KeyMap defines the keybindings

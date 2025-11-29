@@ -30,6 +30,8 @@ func (m Model) View() string {
 		return m.renderTypingMode()
 	case types.ModeSelectingResource:
 		return m.renderSelectingResourceMode()
+	case types.ModeSelectingFile:
+		return m.renderSelectingFileMode()
 	case types.ModeViewingHistory:
 		return m.renderViewingHistoryMode()
 	case types.ModeViewingOutput:
@@ -99,35 +101,60 @@ func (m Model) renderTypingMode() string {
 	inputView := m.commandInput.View()
 	b.WriteString(inputView)
 
-	// Add ghost text for top suggestion if available
-	if len(m.suggestions) > 0 && m.commandInput.Value() != "" {
-		ghostText := m.suggestions[0]
-		ghostStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240")) // dim gray
-		b.WriteString(ghostStyle.Render(ghostText))
-	}
+	// The textinput already shows ghost text for the current suggestion
+	// so we don't need to add extra ghost text here
 
 	b.WriteString("\n")
 
-	// Show suggestion list below input
+	// Show suggestion list below input with scrolling window
 	if len(m.suggestions) > 0 {
-		suggestionStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("244")) // lighter gray
-		maxSuggestions := 10
-		displayCount := len(m.suggestions)
-		if displayCount > maxSuggestions {
-			displayCount = maxSuggestions
+		suggestionStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("244"))          // lighter gray
+		selectedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("212")).Bold(true) // pink/magenta for selected
+		maxVisible := 10
+
+		// Calculate the visible window to keep selected item in view
+		startIdx := 0
+		endIdx := len(m.suggestions)
+
+		if len(m.suggestions) > maxVisible {
+			// Calculate window that keeps selected item visible
+			// Try to keep selected item in the middle when possible
+			halfWindow := maxVisible / 2
+
+			if m.suggestionIndex <= halfWindow {
+				// Near the start - show from beginning
+				startIdx = 0
+				endIdx = maxVisible
+			} else if m.suggestionIndex >= len(m.suggestions)-halfWindow {
+				// Near the end - show last items
+				startIdx = len(m.suggestions) - maxVisible
+				endIdx = len(m.suggestions)
+			} else {
+				// In the middle - center around selected
+				startIdx = m.suggestionIndex - halfWindow
+				endIdx = startIdx + maxVisible
+			}
 		}
 
-		for i := 0; i < displayCount; i++ {
-			prefix := "  "
-			if i == 0 {
-				prefix = "→ " // highlight first suggestion
-			}
-			b.WriteString(suggestionStyle.Render(prefix + m.suggestions[i]))
+		// Show scroll indicator at top if not showing from start
+		if startIdx > 0 {
+			b.WriteString(suggestionStyle.Render(fmt.Sprintf("  ↑ %d more above", startIdx)))
 			b.WriteString("\n")
 		}
 
-		if len(m.suggestions) > maxSuggestions {
-			b.WriteString(suggestionStyle.Render(fmt.Sprintf("  ... and %d more", len(m.suggestions)-maxSuggestions)))
+		for i := startIdx; i < endIdx; i++ {
+			sug := m.suggestions[i]
+			if i == m.suggestionIndex {
+				b.WriteString(selectedStyle.Render("→ " + sug))
+			} else {
+				b.WriteString(suggestionStyle.Render("  " + sug))
+			}
+			b.WriteString("\n")
+		}
+
+		// Show scroll indicator at bottom if more items below
+		if endIdx < len(m.suggestions) {
+			b.WriteString(suggestionStyle.Render(fmt.Sprintf("  ↓ %d more below", len(m.suggestions)-endIdx)))
 			b.WriteString("\n")
 		}
 	}
@@ -140,10 +167,40 @@ func (m Model) renderTypingMode() string {
 		b.WriteString("\n\n")
 	}
 
-	// Show last output in viewport if available
+	// Show last output in viewport if available (limited height to leave room for input)
 	if m.cmdOutput != "" {
-		viewportContent := m.viewport.View()
-		b.WriteString(viewportStyle.Render(viewportContent))
+		// Calculate available height for output
+		// Reserve space for: title(2) + prompt(1) + suggestions(~12) + help(2) + padding(3) = ~20 lines
+		maxOutputHeight := m.height - 20
+		if maxOutputHeight < 5 {
+			maxOutputHeight = 5
+		}
+		if maxOutputHeight > 20 {
+			maxOutputHeight = 20 // Cap output height
+		}
+
+		// Create a limited viewport view
+		lines := strings.Split(m.cmdOutput, "\n")
+		displayLines := lines
+		hasMore := false
+		if len(lines) > maxOutputHeight {
+			displayLines = lines[:maxOutputHeight]
+			hasMore = true
+		}
+
+		outputStyle := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("240")).
+			Padding(0, 1).
+			Width(m.width - 4)
+
+		output := strings.Join(displayLines, "\n")
+		if hasMore {
+			moreStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Italic(true)
+			output += "\n" + moreStyle.Render(fmt.Sprintf("... %d more lines (Ctrl+O to view full output)", len(lines)-maxOutputHeight))
+		}
+
+		b.WriteString(outputStyle.Render(output))
 		b.WriteString("\n\n")
 	}
 
@@ -169,6 +226,30 @@ func (m Model) renderSelectingResourceMode() string {
 
 	// Help
 	b.WriteString(RenderHelp("[↑↓] navigate  [Enter] select  [Esc] cancel  [/] search"))
+
+	return b.String()
+}
+
+// renderSelectingFileMode renders the file selection mode
+func (m Model) renderSelectingFileMode() string {
+	var b strings.Builder
+
+	// Title bar
+	title := RenderTitle("Purr", m.context)
+	b.WriteString(title)
+	b.WriteString("\n\n")
+
+	// Current directory
+	dirStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("99")).Bold(true)
+	b.WriteString(dirStyle.Render("📁 " + m.filePicker.CurrentDirectory))
+	b.WriteString("\n\n")
+
+	// File picker
+	b.WriteString(m.filePicker.View())
+	b.WriteString("\n\n")
+
+	// Help
+	b.WriteString(RenderHelp("[↑↓/jk] navigate  [Enter/l] open/select  [←/h/Backspace] back  [Esc] cancel"))
 
 	return b.String()
 }
@@ -257,12 +338,17 @@ func (m Model) renderConfirmingMode() string {
 func (m Model) renderHelpBar() string {
 	items := []string{
 		"[Tab] accept",
-		"[Ctrl+N/P] cycle",
-		"[Ctrl+Space] picker",
+		"[↑↓] cycle",
+		"[@] file",
 		"[Ctrl+R] history",
-		"[Ctrl+L] clear",
-		"[Ctrl+C] quit",
 	}
+
+	// Add output-specific help if there's output
+	if m.cmdOutput != "" {
+		items = append(items, "[Ctrl+O] full output", "[Ctrl+L] clear")
+	}
+
+	items = append(items, "[Ctrl+C] quit")
 
 	return RenderHelp(strings.Join(items, "  "))
 }

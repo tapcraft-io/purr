@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/filepicker"
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -27,6 +28,7 @@ type Model struct {
 	viewport     viewport.Model
 	historyList  list.Model
 	spinner      spinner.Model
+	filePicker   filepicker.Model
 
 	// Application State
 	mode   types.Mode
@@ -52,7 +54,8 @@ type Model struct {
 	completer *kubecomplete.Completer
 
 	// Autocomplete state
-	suggestions []string
+	suggestions     []string
+	suggestionIndex int // Currently selected suggestion (0 = first)
 
 	// Flags
 	ready        bool
@@ -105,12 +108,21 @@ func NewModel(cache k8s.Cache, hist *history.History, ctx, kubeconfig string, co
 	hl.SetShowStatusBar(false)
 	hl.SetFilteringEnabled(true)
 
+	// Initialize file picker
+	fp := filepicker.New()
+	fp.CurrentDirectory, _ = os.Getwd()
+	fp.ShowHidden = false
+	fp.ShowPermissions = false
+	fp.ShowSize = true
+	fp.Height = 15
+
 	return Model{
 		commandInput: ti,
 		resourceList: rl,
 		viewport:     vp,
 		historyList:  hl,
 		spinner:      s,
+		filePicker:   fp,
 		mode:         types.ModeTyping,
 		cache:        cache,
 		history:      hist,
@@ -295,4 +307,3 @@ func min(a, b int) int {
 	}
 	return b
 }
-
