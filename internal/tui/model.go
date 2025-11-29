@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -198,6 +199,16 @@ func convertToListItems(items []types.ListItem) []list.Item {
 	return result
 }
 
+// debugLog writes debug messages to a file
+func debugLog(msg string) {
+	f, err := os.OpenFile("/tmp/purr-debug.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	fmt.Fprintf(f, "%s\n", msg)
+}
+
 // getAutocompleteSuggestions generates autocomplete suggestions based on current input
 // Returns just the next token(s) to suggest, not full commands
 func (m *Model) getAutocompleteSuggestions(input string) []string {
@@ -208,6 +219,7 @@ func (m *Model) getAutocompleteSuggestions(input string) []string {
 
 	// Don't suggest if no completer
 	if m.completer == nil {
+		debugLog("completer is nil")
 		return nil
 	}
 
@@ -218,6 +230,8 @@ func (m *Model) getAutocompleteSuggestions(input string) []string {
 		completionLine = input + " "
 	}
 
+	debugLog(fmt.Sprintf("input=%q completionLine=%q", input, completionLine))
+
 	// Use the new kubecomplete engine
 	ctx := kubecomplete.CompletionContext{
 		Line:             completionLine,
@@ -226,6 +240,7 @@ func (m *Model) getAutocompleteSuggestions(input string) []string {
 	}
 
 	suggestions := m.completer.Complete(completionLine, len(completionLine), ctx)
+	debugLog(fmt.Sprintf("got %d suggestions from completer", len(suggestions)))
 	if len(suggestions) == 0 {
 		return nil
 	}
