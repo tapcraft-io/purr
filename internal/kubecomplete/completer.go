@@ -578,13 +578,22 @@ func (c *Completer) suggestForPositional(cmd *CommandRuntime, ctx CompletionCont
 	case TokenResourceName, TokenResourceNameOrSelector:
 		kind := inferResourceKindFromArgs(cmd, args)
 
-		// For certain commands, if we can't infer the kind, suggest resource types first
+		// If we can't infer the kind from TYPE/NAME pattern, try getting it from
+		// the first non-flag arg (which would be the resource type from a previous positional)
+		if kind == "" {
+			kind = getFirstNonFlagArg(args)
+			debugLog(fmt.Sprintf("inferResourceKindFromArgs returned empty, using first non-flag arg: %q", kind))
+		}
+
+		// If still empty and no args, suggest resource types first
 		if kind == "" && len(args) == 0 {
 			// First positional with no args - suggest resource type instead
 			// This handles commands like "logs", "describe", "delete", etc.
+			debugLog("No kind and no args, suggesting resource types")
 			return c.suggestResourceTypes(cmd, ctx, td)
 		}
 
+		debugLog(fmt.Sprintf("Suggesting resource names for kind=%q, namespace=%q", kind, ctx.CurrentNamespace))
 		return c.suggestResourceNames(ctx, kind, ctx.CurrentNamespace, td)
 	case TokenNamespace:
 		return c.suggestNamespaces(ctx)
