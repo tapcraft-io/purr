@@ -80,6 +80,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.resourceList, cmd = m.resourceList.Update(msg)
 		cmds = append(cmds, cmd)
 
+	case types.ModeSelectingFile:
+		m.filePicker, cmd = m.filePicker.Update(msg)
+		cmds = append(cmds, cmd)
+
 	case types.ModeViewingHistory:
 		m.historyList, cmd = m.historyList.Update(msg)
 		cmds = append(cmds, cmd)
@@ -134,6 +138,9 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case types.ModeSelectingResource:
 		return m.handleSelectingResourceMode(msg)
+
+	case types.ModeSelectingFile:
+		return m.handleSelectingFileMode(msg)
 
 	case types.ModeViewingHistory:
 		return m.handleViewingHistoryMode(msg)
@@ -242,6 +249,10 @@ func (m Model) handleTypingMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, nil
+
+	case "@":
+		// Open file picker
+		return m.showFilePicker()
 
 	case "ctrl+space":
 		// Show resource/namespace picker if applicable
@@ -453,6 +464,46 @@ func (m Model) showResourcePicker(resourceType, namespace string) (tea.Model, te
 	m.resourceList.SetItems(convertToListItems(items))
 	m.mode = types.ModeSelectingResource
 	return m, nil
+}
+
+// showFilePicker opens the file picker dialog
+func (m Model) showFilePicker() (tea.Model, tea.Cmd) {
+	m.mode = types.ModeSelectingFile
+	return m, m.filePicker.Init()
+}
+
+// handleSelectingFileMode handles key presses in file selection mode
+func (m Model) handleSelectingFileMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.mode = types.ModeTyping
+		m.commandInput.Focus()
+		return m, nil
+	}
+
+	// Let the filepicker handle its own keys
+	var cmd tea.Cmd
+	m.filePicker, cmd = m.filePicker.Update(msg)
+
+	// Check if a file was selected
+	if didSelect, path := m.filePicker.DidSelectFile(msg); didSelect {
+		// Insert the file path into the command
+		currentCmd := m.commandInput.Value()
+		m.commandInput.SetValue(currentCmd + path)
+		m.commandInput.CursorEnd()
+
+		// Return to typing mode
+		m.mode = types.ModeTyping
+		m.commandInput.Focus()
+		return m, nil
+	}
+
+	// Check if user tried to select a disabled file
+	if didSelect, _ := m.filePicker.DidSelectDisabledFile(msg); didSelect {
+		m.statusMsg = "Cannot select this file type"
+	}
+
+	return m, cmd
 }
 
 // KeyMap defines the keybindings

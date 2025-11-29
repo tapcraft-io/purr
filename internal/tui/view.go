@@ -30,6 +30,8 @@ func (m Model) View() string {
 		return m.renderTypingMode()
 	case types.ModeSelectingResource:
 		return m.renderSelectingResourceMode()
+	case types.ModeSelectingFile:
+		return m.renderSelectingFileMode()
 	case types.ModeViewingHistory:
 		return m.renderViewingHistoryMode()
 	case types.ModeViewingOutput:
@@ -194,6 +196,30 @@ func (m Model) renderSelectingResourceMode() string {
 
 	// Help
 	b.WriteString(RenderHelp("[↑↓] navigate  [Enter] select  [Esc] cancel  [/] search"))
+
+	return b.String()
+}
+
+// renderSelectingFileMode renders the file selection mode
+func (m Model) renderSelectingFileMode() string {
+	var b strings.Builder
+
+	// Title bar
+	title := RenderTitle("Purr", m.context)
+	b.WriteString(title)
+	b.WriteString("\n\n")
+
+	// Current directory
+	dirStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("99")).Bold(true)
+	b.WriteString(dirStyle.Render("📁 " + m.filePicker.CurrentDirectory))
+	b.WriteString("\n\n")
+
+	// File picker
+	b.WriteString(m.filePicker.View())
+	b.WriteString("\n\n")
+
+	// Help
+	b.WriteString(RenderHelp("[↑↓/jk] navigate  [Enter/l] open/select  [←/h/Backspace] back  [Esc] cancel"))
 
 	return b.String()
 }
