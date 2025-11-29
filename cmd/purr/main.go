@@ -12,6 +12,7 @@ import (
 	"github.com/tapcraft-io/purr/internal/config"
 	"github.com/tapcraft-io/purr/internal/history"
 	"github.com/tapcraft-io/purr/internal/k8s"
+	"github.com/tapcraft-io/purr/internal/kubecomplete"
 	"github.com/tapcraft-io/purr/internal/tui"
 )
 
@@ -87,8 +88,20 @@ func main() {
 		// Continue without history
 	}
 
+	// Load kubectl command specifications
+	root, err := kubecomplete.LoadRootSpecFromFile("kubectl_commands.json")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error loading kubectl commands spec: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Make sure kubectl_commands.json exists in the current directory.\n")
+		os.Exit(1)
+	}
+
+	// Create registry and completer
+	registry := kubecomplete.NewRegistry(root)
+	completer := kubecomplete.NewCompleter(registry, cache)
+
 	// Create and run the TUI
-	model := tui.NewModel(cache, hist, currentContext, cfg.KubeconfigPath)
+	model := tui.NewModel(cache, hist, currentContext, cfg.KubeconfigPath, completer)
 
 	p := tea.NewProgram(
 		model,
