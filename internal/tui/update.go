@@ -195,6 +195,26 @@ func (m Model) handleTypingMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "enter":
+		inputValue := strings.TrimSpace(m.commandInput.Value())
+
+		// Handle built-in commands
+		if inputValue == "clear" || inputValue == "cls" {
+			// Clear screen - same as Ctrl+L
+			m.cmdOutput = ""
+			m.viewport.SetContent("")
+			m.commandInput.SetValue("")
+			m.suggestionIndex = 0
+			m.suggestions = []string{"get", "describe", "logs", "apply", "delete", "exec", "create", "rollout", "scale"}
+			m.commandInput.SetSuggestions(m.suggestions)
+			m.statusMsg = ""
+			return m, nil
+		}
+
+		if inputValue == "exit" || inputValue == "quit" {
+			m.quitting = true
+			return m, tea.Quit
+		}
+
 		command, isShell, err := m.prepareCommand(m.commandInput.Value())
 		if err != nil {
 			m.statusMsg = err.Error()

@@ -78,7 +78,7 @@ func NewResourceCache(clientset *kubernetes.Clientset) *ResourceCache {
 	}
 }
 
-// Start initializes and starts background refresh
+// Start initializes and starts background refresh with watchers
 func (rc *ResourceCache) Start(ctx context.Context) error {
 	rc.ctx, rc.cancel = context.WithCancel(ctx)
 
@@ -87,8 +87,23 @@ func (rc *ResourceCache) Start(ctx context.Context) error {
 		return err
 	}
 
-	// Start background refresh (every 30 seconds)
-	go rc.backgroundRefresh(30 * time.Second)
+	// Start watchers for real-time updates
+	go rc.watchNamespaces()
+	go rc.watchPods()
+	go rc.watchDeployments()
+	go rc.watchServices()
+	go rc.watchNodes()
+	go rc.watchConfigMaps()
+	go rc.watchSecrets()
+	go rc.watchStatefulSets()
+	go rc.watchDaemonSets()
+	go rc.watchJobs()
+	go rc.watchCronJobs()
+	go rc.watchIngresses()
+
+	// Still do periodic full refresh as a fallback (every 5 minutes)
+	// This catches any missed events and handles reconnections
+	go rc.backgroundRefresh(5 * time.Minute)
 
 	return nil
 }
@@ -97,6 +112,772 @@ func (rc *ResourceCache) Start(ctx context.Context) error {
 func (rc *ResourceCache) Stop() {
 	if rc.cancel != nil {
 		rc.cancel()
+	}
+}
+
+// watchNamespaces watches for namespace changes and updates cache
+func (rc *ResourceCache) watchNamespaces() {
+	for {
+		select {
+		case <-rc.ctx.Done():
+			return
+		default:
+		}
+
+		watcher, err := rc.clientset.CoreV1().Namespaces().Watch(rc.ctx, metav1.ListOptions{})
+		if err != nil {
+			time.Sleep(5 * time.Second)
+			continue
+		}
+
+		for event := range watcher.ResultChan() {
+			ns, ok := event.Object.(*corev1.Namespace)
+			if !ok {
+				continue
+			}
+
+			rc.mu.Lock()
+			switch event.Type {
+			case "ADDED":
+				// Check if already exists
+				exists := false
+				for _, existing := range rc.namespaces {
+					if existing.Name == ns.Name {
+						exists = true
+						break
+					}
+				}
+				if !exists {
+					rc.namespaces = append(rc.namespaces, *ns)
+				}
+			case "DELETED":
+				for i, existing := range rc.namespaces {
+					if existing.Name == ns.Name {
+						rc.namespaces = append(rc.namespaces[:i], rc.namespaces[i+1:]...)
+						// Clean up associated resources
+						delete(rc.pods, ns.Name)
+						delete(rc.deployments, ns.Name)
+						delete(rc.services, ns.Name)
+						delete(rc.configmaps, ns.Name)
+						delete(rc.secrets, ns.Name)
+						delete(rc.statefulsets, ns.Name)
+						delete(rc.daemonsets, ns.Name)
+						delete(rc.jobs, ns.Name)
+						delete(rc.cronjobs, ns.Name)
+						delete(rc.ingresses, ns.Name)
+						break
+					}
+				}
+			case "MODIFIED":
+				for i, existing := range rc.namespaces {
+					if existing.Name == ns.Name {
+						rc.namespaces[i] = *ns
+						break
+					}
+				}
+			}
+			rc.mu.Unlock()
+		}
+
+		// Watcher closed, restart after brief delay
+		time.Sleep(time.Second)
+	}
+}
+
+// watchPods watches for pod changes across all namespaces
+func (rc *ResourceCache) watchPods() {
+	for {
+		select {
+		case <-rc.ctx.Done():
+			return
+		default:
+		}
+
+		watcher, err := rc.clientset.CoreV1().Pods("").Watch(rc.ctx, metav1.ListOptions{})
+		if err != nil {
+			time.Sleep(5 * time.Second)
+			continue
+		}
+
+		for event := range watcher.ResultChan() {
+			pod, ok := event.Object.(*corev1.Pod)
+			if !ok {
+				continue
+			}
+
+			rc.mu.Lock()
+			ns := pod.Namespace
+			switch event.Type {
+			case "ADDED":
+				if _, ok := rc.pods[ns]; !ok {
+					rc.pods[ns] = []corev1.Pod{}
+				}
+				// Check if already exists
+				exists := false
+				for _, existing := range rc.pods[ns] {
+					if existing.Name == pod.Name {
+						exists = true
+						break
+					}
+				}
+				if !exists {
+					rc.pods[ns] = append(rc.pods[ns], *pod)
+				}
+			case "DELETED":
+				if pods, ok := rc.pods[ns]; ok {
+					for i, existing := range pods {
+						if existing.Name == pod.Name {
+							rc.pods[ns] = append(pods[:i], pods[i+1:]...)
+							break
+						}
+					}
+				}
+			case "MODIFIED":
+				if pods, ok := rc.pods[ns]; ok {
+					for i, existing := range pods {
+						if existing.Name == pod.Name {
+							rc.pods[ns][i] = *pod
+							break
+						}
+					}
+				}
+			}
+			rc.mu.Unlock()
+		}
+
+		time.Sleep(time.Second)
+	}
+}
+
+// watchDeployments watches for deployment changes across all namespaces
+func (rc *ResourceCache) watchDeployments() {
+	for {
+		select {
+		case <-rc.ctx.Done():
+			return
+		default:
+		}
+
+		watcher, err := rc.clientset.AppsV1().Deployments("").Watch(rc.ctx, metav1.ListOptions{})
+		if err != nil {
+			time.Sleep(5 * time.Second)
+			continue
+		}
+
+		for event := range watcher.ResultChan() {
+			dep, ok := event.Object.(*appsv1.Deployment)
+			if !ok {
+				continue
+			}
+
+			rc.mu.Lock()
+			ns := dep.Namespace
+			switch event.Type {
+			case "ADDED":
+				if _, ok := rc.deployments[ns]; !ok {
+					rc.deployments[ns] = []appsv1.Deployment{}
+				}
+				exists := false
+				for _, existing := range rc.deployments[ns] {
+					if existing.Name == dep.Name {
+						exists = true
+						break
+					}
+				}
+				if !exists {
+					rc.deployments[ns] = append(rc.deployments[ns], *dep)
+				}
+			case "DELETED":
+				if deps, ok := rc.deployments[ns]; ok {
+					for i, existing := range deps {
+						if existing.Name == dep.Name {
+							rc.deployments[ns] = append(deps[:i], deps[i+1:]...)
+							break
+						}
+					}
+				}
+			case "MODIFIED":
+				if deps, ok := rc.deployments[ns]; ok {
+					for i, existing := range deps {
+						if existing.Name == dep.Name {
+							rc.deployments[ns][i] = *dep
+							break
+						}
+					}
+				}
+			}
+			rc.mu.Unlock()
+		}
+
+		time.Sleep(time.Second)
+	}
+}
+
+// watchServices watches for service changes across all namespaces
+func (rc *ResourceCache) watchServices() {
+	for {
+		select {
+		case <-rc.ctx.Done():
+			return
+		default:
+		}
+
+		watcher, err := rc.clientset.CoreV1().Services("").Watch(rc.ctx, metav1.ListOptions{})
+		if err != nil {
+			time.Sleep(5 * time.Second)
+			continue
+		}
+
+		for event := range watcher.ResultChan() {
+			svc, ok := event.Object.(*corev1.Service)
+			if !ok {
+				continue
+			}
+
+			rc.mu.Lock()
+			ns := svc.Namespace
+			switch event.Type {
+			case "ADDED":
+				if _, ok := rc.services[ns]; !ok {
+					rc.services[ns] = []corev1.Service{}
+				}
+				exists := false
+				for _, existing := range rc.services[ns] {
+					if existing.Name == svc.Name {
+						exists = true
+						break
+					}
+				}
+				if !exists {
+					rc.services[ns] = append(rc.services[ns], *svc)
+				}
+			case "DELETED":
+				if svcs, ok := rc.services[ns]; ok {
+					for i, existing := range svcs {
+						if existing.Name == svc.Name {
+							rc.services[ns] = append(svcs[:i], svcs[i+1:]...)
+							break
+						}
+					}
+				}
+			case "MODIFIED":
+				if svcs, ok := rc.services[ns]; ok {
+					for i, existing := range svcs {
+						if existing.Name == svc.Name {
+							rc.services[ns][i] = *svc
+							break
+						}
+					}
+				}
+			}
+			rc.mu.Unlock()
+		}
+
+		time.Sleep(time.Second)
+	}
+}
+
+// watchNodes watches for node changes
+func (rc *ResourceCache) watchNodes() {
+	for {
+		select {
+		case <-rc.ctx.Done():
+			return
+		default:
+		}
+
+		watcher, err := rc.clientset.CoreV1().Nodes().Watch(rc.ctx, metav1.ListOptions{})
+		if err != nil {
+			time.Sleep(5 * time.Second)
+			continue
+		}
+
+		for event := range watcher.ResultChan() {
+			node, ok := event.Object.(*corev1.Node)
+			if !ok {
+				continue
+			}
+
+			rc.mu.Lock()
+			switch event.Type {
+			case "ADDED":
+				exists := false
+				for _, existing := range rc.nodes {
+					if existing.Name == node.Name {
+						exists = true
+						break
+					}
+				}
+				if !exists {
+					rc.nodes = append(rc.nodes, *node)
+				}
+			case "DELETED":
+				for i, existing := range rc.nodes {
+					if existing.Name == node.Name {
+						rc.nodes = append(rc.nodes[:i], rc.nodes[i+1:]...)
+						break
+					}
+				}
+			case "MODIFIED":
+				for i, existing := range rc.nodes {
+					if existing.Name == node.Name {
+						rc.nodes[i] = *node
+						break
+					}
+				}
+			}
+			rc.mu.Unlock()
+		}
+
+		time.Sleep(time.Second)
+	}
+}
+
+// watchConfigMaps watches for configmap changes across all namespaces
+func (rc *ResourceCache) watchConfigMaps() {
+	for {
+		select {
+		case <-rc.ctx.Done():
+			return
+		default:
+		}
+
+		watcher, err := rc.clientset.CoreV1().ConfigMaps("").Watch(rc.ctx, metav1.ListOptions{})
+		if err != nil {
+			time.Sleep(5 * time.Second)
+			continue
+		}
+
+		for event := range watcher.ResultChan() {
+			cm, ok := event.Object.(*corev1.ConfigMap)
+			if !ok {
+				continue
+			}
+
+			rc.mu.Lock()
+			ns := cm.Namespace
+			switch event.Type {
+			case "ADDED":
+				if _, ok := rc.configmaps[ns]; !ok {
+					rc.configmaps[ns] = []corev1.ConfigMap{}
+				}
+				exists := false
+				for _, existing := range rc.configmaps[ns] {
+					if existing.Name == cm.Name {
+						exists = true
+						break
+					}
+				}
+				if !exists {
+					rc.configmaps[ns] = append(rc.configmaps[ns], *cm)
+				}
+			case "DELETED":
+				if cms, ok := rc.configmaps[ns]; ok {
+					for i, existing := range cms {
+						if existing.Name == cm.Name {
+							rc.configmaps[ns] = append(cms[:i], cms[i+1:]...)
+							break
+						}
+					}
+				}
+			case "MODIFIED":
+				if cms, ok := rc.configmaps[ns]; ok {
+					for i, existing := range cms {
+						if existing.Name == cm.Name {
+							rc.configmaps[ns][i] = *cm
+							break
+						}
+					}
+				}
+			}
+			rc.mu.Unlock()
+		}
+
+		time.Sleep(time.Second)
+	}
+}
+
+// watchSecrets watches for secret changes across all namespaces
+func (rc *ResourceCache) watchSecrets() {
+	for {
+		select {
+		case <-rc.ctx.Done():
+			return
+		default:
+		}
+
+		watcher, err := rc.clientset.CoreV1().Secrets("").Watch(rc.ctx, metav1.ListOptions{})
+		if err != nil {
+			time.Sleep(5 * time.Second)
+			continue
+		}
+
+		for event := range watcher.ResultChan() {
+			secret, ok := event.Object.(*corev1.Secret)
+			if !ok {
+				continue
+			}
+
+			rc.mu.Lock()
+			ns := secret.Namespace
+			switch event.Type {
+			case "ADDED":
+				if _, ok := rc.secrets[ns]; !ok {
+					rc.secrets[ns] = []corev1.Secret{}
+				}
+				exists := false
+				for _, existing := range rc.secrets[ns] {
+					if existing.Name == secret.Name {
+						exists = true
+						break
+					}
+				}
+				if !exists {
+					rc.secrets[ns] = append(rc.secrets[ns], *secret)
+				}
+			case "DELETED":
+				if secrets, ok := rc.secrets[ns]; ok {
+					for i, existing := range secrets {
+						if existing.Name == secret.Name {
+							rc.secrets[ns] = append(secrets[:i], secrets[i+1:]...)
+							break
+						}
+					}
+				}
+			case "MODIFIED":
+				if secrets, ok := rc.secrets[ns]; ok {
+					for i, existing := range secrets {
+						if existing.Name == secret.Name {
+							rc.secrets[ns][i] = *secret
+							break
+						}
+					}
+				}
+			}
+			rc.mu.Unlock()
+		}
+
+		time.Sleep(time.Second)
+	}
+}
+
+// watchStatefulSets watches for statefulset changes across all namespaces
+func (rc *ResourceCache) watchStatefulSets() {
+	for {
+		select {
+		case <-rc.ctx.Done():
+			return
+		default:
+		}
+
+		watcher, err := rc.clientset.AppsV1().StatefulSets("").Watch(rc.ctx, metav1.ListOptions{})
+		if err != nil {
+			time.Sleep(5 * time.Second)
+			continue
+		}
+
+		for event := range watcher.ResultChan() {
+			sts, ok := event.Object.(*appsv1.StatefulSet)
+			if !ok {
+				continue
+			}
+
+			rc.mu.Lock()
+			ns := sts.Namespace
+			switch event.Type {
+			case "ADDED":
+				if _, ok := rc.statefulsets[ns]; !ok {
+					rc.statefulsets[ns] = []appsv1.StatefulSet{}
+				}
+				exists := false
+				for _, existing := range rc.statefulsets[ns] {
+					if existing.Name == sts.Name {
+						exists = true
+						break
+					}
+				}
+				if !exists {
+					rc.statefulsets[ns] = append(rc.statefulsets[ns], *sts)
+				}
+			case "DELETED":
+				if stsList, ok := rc.statefulsets[ns]; ok {
+					for i, existing := range stsList {
+						if existing.Name == sts.Name {
+							rc.statefulsets[ns] = append(stsList[:i], stsList[i+1:]...)
+							break
+						}
+					}
+				}
+			case "MODIFIED":
+				if stsList, ok := rc.statefulsets[ns]; ok {
+					for i, existing := range stsList {
+						if existing.Name == sts.Name {
+							rc.statefulsets[ns][i] = *sts
+							break
+						}
+					}
+				}
+			}
+			rc.mu.Unlock()
+		}
+
+		time.Sleep(time.Second)
+	}
+}
+
+// watchDaemonSets watches for daemonset changes across all namespaces
+func (rc *ResourceCache) watchDaemonSets() {
+	for {
+		select {
+		case <-rc.ctx.Done():
+			return
+		default:
+		}
+
+		watcher, err := rc.clientset.AppsV1().DaemonSets("").Watch(rc.ctx, metav1.ListOptions{})
+		if err != nil {
+			time.Sleep(5 * time.Second)
+			continue
+		}
+
+		for event := range watcher.ResultChan() {
+			ds, ok := event.Object.(*appsv1.DaemonSet)
+			if !ok {
+				continue
+			}
+
+			rc.mu.Lock()
+			ns := ds.Namespace
+			switch event.Type {
+			case "ADDED":
+				if _, ok := rc.daemonsets[ns]; !ok {
+					rc.daemonsets[ns] = []appsv1.DaemonSet{}
+				}
+				exists := false
+				for _, existing := range rc.daemonsets[ns] {
+					if existing.Name == ds.Name {
+						exists = true
+						break
+					}
+				}
+				if !exists {
+					rc.daemonsets[ns] = append(rc.daemonsets[ns], *ds)
+				}
+			case "DELETED":
+				if dsList, ok := rc.daemonsets[ns]; ok {
+					for i, existing := range dsList {
+						if existing.Name == ds.Name {
+							rc.daemonsets[ns] = append(dsList[:i], dsList[i+1:]...)
+							break
+						}
+					}
+				}
+			case "MODIFIED":
+				if dsList, ok := rc.daemonsets[ns]; ok {
+					for i, existing := range dsList {
+						if existing.Name == ds.Name {
+							rc.daemonsets[ns][i] = *ds
+							break
+						}
+					}
+				}
+			}
+			rc.mu.Unlock()
+		}
+
+		time.Sleep(time.Second)
+	}
+}
+
+// watchJobs watches for job changes across all namespaces
+func (rc *ResourceCache) watchJobs() {
+	for {
+		select {
+		case <-rc.ctx.Done():
+			return
+		default:
+		}
+
+		watcher, err := rc.clientset.BatchV1().Jobs("").Watch(rc.ctx, metav1.ListOptions{})
+		if err != nil {
+			time.Sleep(5 * time.Second)
+			continue
+		}
+
+		for event := range watcher.ResultChan() {
+			job, ok := event.Object.(*batchv1.Job)
+			if !ok {
+				continue
+			}
+
+			rc.mu.Lock()
+			ns := job.Namespace
+			switch event.Type {
+			case "ADDED":
+				if _, ok := rc.jobs[ns]; !ok {
+					rc.jobs[ns] = []batchv1.Job{}
+				}
+				exists := false
+				for _, existing := range rc.jobs[ns] {
+					if existing.Name == job.Name {
+						exists = true
+						break
+					}
+				}
+				if !exists {
+					rc.jobs[ns] = append(rc.jobs[ns], *job)
+				}
+			case "DELETED":
+				if jobs, ok := rc.jobs[ns]; ok {
+					for i, existing := range jobs {
+						if existing.Name == job.Name {
+							rc.jobs[ns] = append(jobs[:i], jobs[i+1:]...)
+							break
+						}
+					}
+				}
+			case "MODIFIED":
+				if jobs, ok := rc.jobs[ns]; ok {
+					for i, existing := range jobs {
+						if existing.Name == job.Name {
+							rc.jobs[ns][i] = *job
+							break
+						}
+					}
+				}
+			}
+			rc.mu.Unlock()
+		}
+
+		time.Sleep(time.Second)
+	}
+}
+
+// watchCronJobs watches for cronjob changes across all namespaces
+func (rc *ResourceCache) watchCronJobs() {
+	for {
+		select {
+		case <-rc.ctx.Done():
+			return
+		default:
+		}
+
+		watcher, err := rc.clientset.BatchV1().CronJobs("").Watch(rc.ctx, metav1.ListOptions{})
+		if err != nil {
+			time.Sleep(5 * time.Second)
+			continue
+		}
+
+		for event := range watcher.ResultChan() {
+			cj, ok := event.Object.(*batchv1.CronJob)
+			if !ok {
+				continue
+			}
+
+			rc.mu.Lock()
+			ns := cj.Namespace
+			switch event.Type {
+			case "ADDED":
+				if _, ok := rc.cronjobs[ns]; !ok {
+					rc.cronjobs[ns] = []batchv1.CronJob{}
+				}
+				exists := false
+				for _, existing := range rc.cronjobs[ns] {
+					if existing.Name == cj.Name {
+						exists = true
+						break
+					}
+				}
+				if !exists {
+					rc.cronjobs[ns] = append(rc.cronjobs[ns], *cj)
+				}
+			case "DELETED":
+				if cjs, ok := rc.cronjobs[ns]; ok {
+					for i, existing := range cjs {
+						if existing.Name == cj.Name {
+							rc.cronjobs[ns] = append(cjs[:i], cjs[i+1:]...)
+							break
+						}
+					}
+				}
+			case "MODIFIED":
+				if cjs, ok := rc.cronjobs[ns]; ok {
+					for i, existing := range cjs {
+						if existing.Name == cj.Name {
+							rc.cronjobs[ns][i] = *cj
+							break
+						}
+					}
+				}
+			}
+			rc.mu.Unlock()
+		}
+
+		time.Sleep(time.Second)
+	}
+}
+
+// watchIngresses watches for ingress changes across all namespaces
+func (rc *ResourceCache) watchIngresses() {
+	for {
+		select {
+		case <-rc.ctx.Done():
+			return
+		default:
+		}
+
+		watcher, err := rc.clientset.NetworkingV1().Ingresses("").Watch(rc.ctx, metav1.ListOptions{})
+		if err != nil {
+			time.Sleep(5 * time.Second)
+			continue
+		}
+
+		for event := range watcher.ResultChan() {
+			ing, ok := event.Object.(*networkingv1.Ingress)
+			if !ok {
+				continue
+			}
+
+			rc.mu.Lock()
+			ns := ing.Namespace
+			switch event.Type {
+			case "ADDED":
+				if _, ok := rc.ingresses[ns]; !ok {
+					rc.ingresses[ns] = []networkingv1.Ingress{}
+				}
+				exists := false
+				for _, existing := range rc.ingresses[ns] {
+					if existing.Name == ing.Name {
+						exists = true
+						break
+					}
+				}
+				if !exists {
+					rc.ingresses[ns] = append(rc.ingresses[ns], *ing)
+				}
+			case "DELETED":
+				if ings, ok := rc.ingresses[ns]; ok {
+					for i, existing := range ings {
+						if existing.Name == ing.Name {
+							rc.ingresses[ns] = append(ings[:i], ings[i+1:]...)
+							break
+						}
+					}
+				}
+			case "MODIFIED":
+				if ings, ok := rc.ingresses[ns]; ok {
+					for i, existing := range ings {
+						if existing.Name == ing.Name {
+							rc.ingresses[ns][i] = *ing
+							break
+						}
+					}
+				}
+			}
+			rc.mu.Unlock()
+		}
+
+		time.Sleep(time.Second)
 	}
 }
 
