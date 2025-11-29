@@ -92,10 +92,47 @@ func (m Model) renderTypingMode() string {
 	b.WriteString(title)
 	b.WriteString("\n\n")
 
-	// Command input (textinput handles suggestions natively)
+	// Command input with custom ghost text
 	b.WriteString(RenderPrompt())
-	b.WriteString(m.commandInput.View())
-	b.WriteString("\n\n")
+
+	// Render the input field
+	inputView := m.commandInput.View()
+	b.WriteString(inputView)
+
+	// Add ghost text for top suggestion if available
+	if len(m.suggestions) > 0 && m.commandInput.Value() != "" {
+		ghostText := m.suggestions[0]
+		ghostStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240")) // dim gray
+		b.WriteString(ghostStyle.Render(ghostText))
+	}
+
+	b.WriteString("\n")
+
+	// Show suggestion list below input
+	if len(m.suggestions) > 0 {
+		suggestionStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("244")) // lighter gray
+		maxSuggestions := 10
+		displayCount := len(m.suggestions)
+		if displayCount > maxSuggestions {
+			displayCount = maxSuggestions
+		}
+
+		for i := 0; i < displayCount; i++ {
+			prefix := "  "
+			if i == 0 {
+				prefix = "→ " // highlight first suggestion
+			}
+			b.WriteString(suggestionStyle.Render(prefix + m.suggestions[i]))
+			b.WriteString("\n")
+		}
+
+		if len(m.suggestions) > maxSuggestions {
+			b.WriteString(suggestionStyle.Render(fmt.Sprintf("  ... and %d more", len(m.suggestions)-maxSuggestions)))
+			b.WriteString("\n")
+		}
+	}
+
+	b.WriteString("\n")
 
 	// Show status message if present
 	if m.statusMsg != "" {

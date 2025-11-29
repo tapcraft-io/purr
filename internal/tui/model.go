@@ -51,6 +51,9 @@ type Model struct {
 	parser    *exec.Parser
 	completer *kubecomplete.Completer
 
+	// Autocomplete state
+	suggestions []string
+
 	// Flags
 	ready        bool
 	quitting     bool
@@ -212,13 +215,17 @@ func debugLog(msg string) {
 // getAutocompleteSuggestions generates autocomplete suggestions based on current input
 // Returns just the next token(s) to suggest, not full commands
 func (m *Model) getAutocompleteSuggestions(input string) []string {
+	debugLog(fmt.Sprintf("=== getAutocompleteSuggestions input=%q ===", input))
+
 	// Don't suggest for shell commands
 	if strings.HasPrefix(strings.TrimSpace(input), "!") {
+		debugLog("skipping: shell command")
 		return nil
 	}
 
 	// Don't suggest if no completer
 	if m.completer == nil {
+		debugLog("skipping: no completer")
 		return nil
 	}
 
@@ -230,6 +237,12 @@ func (m *Model) getAutocompleteSuggestions(input string) []string {
 	}
 
 	suggestions := m.completer.Complete(input, len(input), ctx)
+	debugLog(fmt.Sprintf("completer returned %d suggestions", len(suggestions)))
+	if len(suggestions) > 0 {
+		first := min(5, len(suggestions))
+		debugLog(fmt.Sprintf("first few: %+v", suggestions[:first]))
+	}
+
 	if len(suggestions) == 0 {
 		return nil
 	}
@@ -238,6 +251,7 @@ func (m *Model) getAutocompleteSuggestions(input string) []string {
 	hasTrailingSpace := len(input) > 0 && input[len(input)-1] == ' '
 	trimmed := strings.TrimSpace(input)
 	tokens := strings.Fields(trimmed)
+	debugLog(fmt.Sprintf("hasTrailingSpace=%v, tokens=%v", hasTrailingSpace, tokens))
 
 	// Determine if we should filter by current partial token
 	var currentPartial string
@@ -245,12 +259,15 @@ func (m *Model) getAutocompleteSuggestions(input string) []string {
 		// Check if the current tokens match a complete command
 		// If so, we're suggesting the next token, not completing the command
 		cmd, pathLen := m.completer.Registry.MatchCommand(tokens)
+		debugLog(fmt.Sprintf("cmd=%v, pathLen=%d, len(tokens)=%d", cmd != nil, pathLen, len(tokens)))
 		if cmd != nil && pathLen == len(tokens) {
 			// Tokens match a complete command - don't filter
 			currentPartial = ""
+			debugLog("complete command match - no filtering")
 		} else {
 			// Either no command match or partial match - filter by last token
 			currentPartial = tokens[len(tokens)-1]
+			debugLog(fmt.Sprintf("partial/no match - filter by %q", currentPartial))
 		}
 	}
 
@@ -268,6 +285,14 @@ func (m *Model) getAutocompleteSuggestions(input string) []string {
 		}
 	}
 
+	debugLog(fmt.Sprintf("returning %d results: %v", len(result), result))
 	return result
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 

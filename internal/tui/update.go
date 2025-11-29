@@ -223,8 +223,9 @@ func (m Model) handleTypingMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	cmds = append(cmds, cmd)
 
 	// Update autocomplete suggestions after every keystroke
-	suggestions := m.getAutocompleteSuggestions(m.commandInput.Value())
-	m.commandInput.SetSuggestions(suggestions)
+	m.suggestions = m.getAutocompleteSuggestions(m.commandInput.Value())
+	// Still set them on the textinput for its built-in dropdown
+	m.commandInput.SetSuggestions(m.suggestions)
 
 	return m, tea.Batch(cmds...)
 }
