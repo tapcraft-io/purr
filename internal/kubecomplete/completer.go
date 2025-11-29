@@ -27,6 +27,9 @@ func (c *Completer) Complete(line string, cursor int, ctx CompletionContext) []S
 	}
 	segment := line[:cursor]
 
+	// Check if we have trailing space (user finished typing current token)
+	hasTrailingSpace := len(segment) > 0 && (segment[len(segment)-1] == ' ' || segment[len(segment)-1] == '\t')
+
 	tokens := shellSplit(segment)
 	tokens = normalizeKubectl(tokens)
 
@@ -42,12 +45,13 @@ func (c *Completer) Complete(line string, cursor int, ctx CompletionContext) []S
 
 	args := tokens[pathLen:] // after command path
 
-	// Case 1: last token is an unfinished flag value for a flag with `after`
-	if len(args) > 0 && isFlagToken(args[len(args)-1]) {
+	// Case 1: We just finished typing a flag and added space - suggest flag value
+	if hasTrailingSpace && len(args) > 0 && isFlagToken(args[len(args)-1]) {
 		return c.suggestAfterFlag(cmd, ctx, args)
 	}
 
-	// Otherwise: we are between args / after a completed argument → use positional + flags
+	// Case 2: We're typing a flag (no trailing space) - this will be handled by positionals+flags
+	// Case 3: Otherwise - suggest positionals and flags
 	return c.suggestPositionalsAndFlags(cmd, ctx, args)
 }
 

@@ -201,10 +201,8 @@ func convertToListItems(items []types.ListItem) []list.Item {
 // getAutocompleteSuggestions generates autocomplete suggestions based on current input
 // Returns FULL command suggestions that complete the current input
 func (m *Model) getAutocompleteSuggestions(input string) []string {
-	trimmed := strings.TrimSpace(input)
-
-	// Don't suggest for shell commands
-	if strings.HasPrefix(trimmed, "!") {
+	// Don't suggest for shell commands (but preserve leading/trailing spaces for other checks)
+	if strings.HasPrefix(strings.TrimSpace(input), "!") {
 		return nil
 	}
 
@@ -213,22 +211,30 @@ func (m *Model) getAutocompleteSuggestions(input string) []string {
 		return nil
 	}
 
+	// IMPORTANT: Don't trim spaces - trailing space indicates readiness for next token
+	hasTrailingSpace := len(input) > 0 && input[len(input)-1] == ' '
+
+	// For the completer, we need to work with the line as-is but add a placeholder
+	// when there's trailing space to indicate we want suggestions for the next token
+	completionLine := input
+	if hasTrailingSpace {
+		completionLine = input + ""  // Keep trailing space
+	}
+
 	// Use the new kubecomplete engine
 	ctx := kubecomplete.CompletionContext{
-		Line:             trimmed,
-		Cursor:           len(trimmed),
+		Line:             completionLine,
+		Cursor:           len(completionLine),
 		CurrentNamespace: m.namespace,
 	}
 
-	suggestions := m.completer.Complete(trimmed, len(trimmed), ctx)
+	suggestions := m.completer.Complete(completionLine, len(completionLine), ctx)
 	if len(suggestions) == 0 {
 		return nil
 	}
 
 	// Convert kubecomplete.Suggestion to string suggestions for the textinput
-	// Determine if we need to append to existing input or replace last token
-	hasTrailingSpace := len(trimmed) > 0 && trimmed[len(trimmed)-1] == ' '
-
+	trimmed := strings.TrimSpace(input)
 	tokens := strings.Fields(trimmed)
 	var prefix string
 
