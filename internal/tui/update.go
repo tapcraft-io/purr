@@ -56,10 +56,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.history != nil {
 			_ = m.history.Save()
 		}
-		// Auto-return to typing mode with cleared input
+		// Return to typing mode with cleared input and suggestions - output remains visible
 		m.mode = types.ModeTyping
 		m.commandInput.SetValue("")
 		m.commandInput.Focus()
+		// Reset suggestions to default commands
+		m.suggestions = []string{"get", "describe", "logs", "apply", "delete", "exec", "create", "rollout", "scale"}
+		m.suggestionIndex = 0
+		m.commandInput.SetSuggestions(m.suggestions)
 
 	case errMsg:
 		m.err = msg.err
@@ -221,6 +225,13 @@ func (m Model) handleTypingMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case "ctrl+o":
+		// View full output
+		if m.cmdOutput != "" {
+			m.mode = types.ModeViewingOutput
+		}
+		return m, nil
+
 	case "ctrl+l":
 		// Clear screen
 		m.cmdOutput = ""
@@ -366,8 +377,10 @@ func (m Model) handleViewingHistoryMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // handleViewingOutputMode handles key presses in output viewing mode
 func (m Model) handleViewingOutputMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "n", "q":
-		// New command
+	case "n", "q", "esc":
+		// New command - clear output and return to typing
+		m.cmdOutput = ""
+		m.viewport.SetContent("")
 		m.mode = types.ModeTyping
 		m.commandInput.Focus()
 		m.commandInput.SetValue("")
@@ -383,15 +396,12 @@ func (m Model) handleViewingOutputMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "e":
 		// Edit and re-run
 		if m.lastCmd != "" {
+			m.cmdOutput = ""
+			m.viewport.SetContent("")
 			m.commandInput.SetValue(m.lastCmd)
 			m.mode = types.ModeTyping
 			m.commandInput.Focus()
 		}
-		return m, nil
-
-	case "esc":
-		m.mode = types.ModeTyping
-		m.commandInput.Focus()
 		return m, nil
 	}
 
@@ -408,20 +418,57 @@ func (m Model) prepareCommand(raw string) (string, bool, error) {
 		return "", false, fmt.Errorf("please enter a command")
 	}
 
+	// Explicit shell command with ! prefix
 	if strings.HasPrefix(trimmed, "!") {
 		shell := strings.TrimSpace(strings.TrimPrefix(trimmed, "!"))
 		if shell == "" {
 			return "", true, fmt.Errorf("shell command cannot be empty")
 		}
-
 		return "!" + shell, true, nil
 	}
 
+	// Already has kubectl prefix
 	if strings.HasPrefix(trimmed, "kubectl") {
 		return trimmed, false, nil
 	}
 
-	return "kubectl " + trimmed, false, nil
+	// Check if the first word is a kubectl verb
+	firstWord := strings.Fields(trimmed)[0]
+	if m.isKubectlVerb(firstWord) {
+		return "kubectl " + trimmed, false, nil
+	}
+
+	// Not a kubectl verb - run as shell command
+	return "!" + trimmed, true, nil
+}
+
+// isKubectlVerb checks if the given word is a valid kubectl command/verb
+func (m Model) isKubectlVerb(word string) bool {
+	if m.completer == nil || m.completer.Registry == nil {
+		// Fallback to common verbs if completer not available
+		commonVerbs := map[string]bool{
+			"get": true, "describe": true, "create": true, "delete": true,
+			"apply": true, "edit": true, "logs": true, "exec": true,
+			"port-forward": true, "proxy": true, "cp": true, "attach": true,
+			"run": true, "expose": true, "set": true, "explain": true,
+			"scale": true, "autoscale": true, "rollout": true, "label": true,
+			"annotate": true, "config": true, "cluster-info": true, "top": true,
+			"cordon": true, "uncordon": true, "drain": true, "taint": true,
+			"certificate": true, "auth": true, "diff": true, "patch": true,
+			"replace": true, "wait": true, "kustomize": true, "api-resources": true,
+			"api-versions": true, "version": true, "plugin": true, "debug": true,
+		}
+		return commonVerbs[word]
+	}
+
+	// Check against the registry's known commands
+	topLevelCmds := m.completer.Registry.TopLevelCommands()
+	for _, cmd := range topLevelCmds {
+		if cmd == word {
+			return true
+		}
+	}
+	return false
 }
 
 // showNamespacePicker shows the namespace picker

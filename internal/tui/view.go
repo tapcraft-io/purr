@@ -167,10 +167,40 @@ func (m Model) renderTypingMode() string {
 		b.WriteString("\n\n")
 	}
 
-	// Show last output in viewport if available
+	// Show last output in viewport if available (limited height to leave room for input)
 	if m.cmdOutput != "" {
-		viewportContent := m.viewport.View()
-		b.WriteString(viewportStyle.Render(viewportContent))
+		// Calculate available height for output
+		// Reserve space for: title(2) + prompt(1) + suggestions(~12) + help(2) + padding(3) = ~20 lines
+		maxOutputHeight := m.height - 20
+		if maxOutputHeight < 5 {
+			maxOutputHeight = 5
+		}
+		if maxOutputHeight > 20 {
+			maxOutputHeight = 20 // Cap output height
+		}
+
+		// Create a limited viewport view
+		lines := strings.Split(m.cmdOutput, "\n")
+		displayLines := lines
+		hasMore := false
+		if len(lines) > maxOutputHeight {
+			displayLines = lines[:maxOutputHeight]
+			hasMore = true
+		}
+
+		outputStyle := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("240")).
+			Padding(0, 1).
+			Width(m.width - 4)
+
+		output := strings.Join(displayLines, "\n")
+		if hasMore {
+			moreStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Italic(true)
+			output += "\n" + moreStyle.Render(fmt.Sprintf("... %d more lines (Ctrl+O to view full output)", len(lines)-maxOutputHeight))
+		}
+
+		b.WriteString(outputStyle.Render(output))
 		b.WriteString("\n\n")
 	}
 
@@ -308,12 +338,17 @@ func (m Model) renderConfirmingMode() string {
 func (m Model) renderHelpBar() string {
 	items := []string{
 		"[Tab] accept",
-		"[Ctrl+N/P] cycle",
-		"[Ctrl+Space] picker",
+		"[↑↓] cycle",
+		"[@] file",
 		"[Ctrl+R] history",
-		"[Ctrl+L] clear",
-		"[Ctrl+C] quit",
 	}
+
+	// Add output-specific help if there's output
+	if m.cmdOutput != "" {
+		items = append(items, "[Ctrl+O] full output", "[Ctrl+L] clear")
+	}
+
+	items = append(items, "[Ctrl+C] quit")
 
 	return RenderHelp(strings.Join(items, "  "))
 }
