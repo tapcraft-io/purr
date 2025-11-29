@@ -55,12 +55,12 @@ func (c *Completer) Complete(line string, cursor int, ctx CompletionContext) []S
 
 	// Case 1: We just finished typing a flag and added space - suggest flag value
 	if hasTrailingSpace && len(args) > 0 && isFlagToken(args[len(args)-1]) {
-		return c.suggestAfterFlag(cmd, ctx, args)
+		return c.suggestAfterFlag(cmd, ctx, args, hasTrailingSpace)
 	}
 
 	// Case 2: We're typing a flag (no trailing space) - this will be handled by positionals+flags
 	// Case 3: Otherwise - suggest positionals and flags
-	return c.suggestPositionalsAndFlags(cmd, ctx, args)
+	return c.suggestPositionalsAndFlags(cmd, ctx, args, hasTrailingSpace)
 }
 
 func shellSplit(s string) []string {
@@ -152,7 +152,7 @@ func scorePrefix(value, prefix string) float64 {
 	return 0
 }
 
-func (c *Completer) suggestAfterFlag(cmd *CommandRuntime, ctx CompletionContext, args []string) []Suggestion {
+func (c *Completer) suggestAfterFlag(cmd *CommandRuntime, ctx CompletionContext, args []string, hasTrailingSpace bool) []Suggestion {
 	if len(args) == 0 {
 		return nil
 	}
@@ -160,13 +160,13 @@ func (c *Completer) suggestAfterFlag(cmd *CommandRuntime, ctx CompletionContext,
 	primary, ok := cmd.AliasToPrimary[flagToken]
 	if !ok {
 		// unknown flag → fall back
-		return c.suggestPositionalsAndFlags(cmd, ctx, args)
+		return c.suggestPositionalsAndFlags(cmd, ctx, args, hasTrailingSpace)
 	}
 
 	flagDesc, ok := cmd.Spec.Flags[primary]
 	if !ok || flagDesc.After == nil {
 		// flag doesn't take a value
-		return c.suggestPositionalsAndFlags(cmd, ctx, args)
+		return c.suggestPositionalsAndFlags(cmd, ctx, args, hasTrailingSpace)
 	}
 
 	td := flagDesc.After
@@ -339,11 +339,11 @@ func inferResourceKindFromArgs(cmd *CommandRuntime, args []string) string {
 	return ""
 }
 
-func (c *Completer) suggestPositionalsAndFlags(cmd *CommandRuntime, ctx CompletionContext, args []string) []Suggestion {
+func (c *Completer) suggestPositionalsAndFlags(cmd *CommandRuntime, ctx CompletionContext, args []string, hasTrailingSpace bool) []Suggestion {
 	spec := cmd.Spec
 
 	usedFlags := parseUsedFlags(cmd, args)
-	posIndex := countSatisfiedPositionals(spec.Positionals, cmd, args)
+	posIndex := countSatisfiedPositionals(spec.Positionals, cmd, args, hasTrailingSpace)
 
 	var out []Suggestion
 
@@ -395,7 +395,7 @@ func parseUsedFlags(cmd *CommandRuntime, args []string) map[string]bool {
 	return used
 }
 
-func countSatisfiedPositionals(positionals []TokenDescriptor, cmd *CommandRuntime, args []string) int {
+func countSatisfiedPositionals(positionals []TokenDescriptor, cmd *CommandRuntime, args []string, hasTrailingSpace bool) int {
 	posIndex := 0
 	i := 0
 	for i < len(args) && posIndex < len(positionals) {
@@ -413,6 +413,13 @@ func countSatisfiedPositionals(positionals []TokenDescriptor, cmd *CommandRuntim
 				i++
 			}
 			continue
+		}
+		// Don't count the last token as satisfied if there's no trailing space
+		// (it's still being typed, so we should suggest completions for it)
+		isLastToken := (i == len(args)-1)
+		if isLastToken && !hasTrailingSpace {
+			// This is a partial token being typed - don't count it as satisfied
+			break
 		}
 		// treat any non-flag as filling a positional slot
 		posIndex++
