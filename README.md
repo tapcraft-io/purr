@@ -6,7 +6,7 @@
 
 A beautiful TUI (Text User Interface) wrapper for kubectl that maintains 100% feature parity while adding quality-of-life improvements through intelligent completion, resource caching, and elegant design.
 
-![Initial Screen](image.png)
+![Main Interface](./docs/images/01-main-interface.png)
 
 ## Features
 
@@ -84,22 +84,22 @@ purr --version
 ### Main Interface
 Type any kubectl command and enjoy enhanced autocomplete:
 
-![Json output and autocomplete](image-2.png)
+![Autocomplete](./docs/images/01-autocomplete.png)
 
 ### Resource Picker
 Press `Tab` after typing a resource type to browse available resources:
 
-![Cached resources](image-3.png)
+![Resource Picker](./docs/images/03-resource-picker.png)
 
 ### Command History (Ctrl+R)
 Search through your command history with fuzzy matching:
 
-![History](image-4.png)
+![History](./docs/images/04-history.png)
 
-### Easy file picker
-Just use @ to reference any file in the working directory
+### File Picker
+Type `@` to open an interactive file picker:
 
-![File picker](image-5.png)
+![File Picker](./docs/images/05-file-picker.png)
 
 ## Usage
 

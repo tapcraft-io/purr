@@ -1,11 +1,14 @@
 package kubecomplete
 
 import (
+	_ "embed"
 	"encoding/json"
-	"os"
 	"sort"
 	"strings"
 )
+
+//go:embed data/kubectl_commands.json
+var embeddedCommandsJSON []byte
 
 // CommandRuntime is the compiled form used by the engine.
 type CommandRuntime struct {
@@ -18,14 +21,10 @@ type Registry struct {
 	Commands map[string]*CommandRuntime // key: strings.Join(Path, " ")
 }
 
-// LoadRootSpecFromFile reads kubectl_commands.json.
-func LoadRootSpecFromFile(path string) (*RootSpec, error) {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
+// LoadRootSpec loads the embedded kubectl commands specification.
+func LoadRootSpec() (*RootSpec, error) {
 	var root RootSpec
-	if err := json.Unmarshal(b, &root); err != nil {
+	if err := json.Unmarshal(embeddedCommandsJSON, &root); err != nil {
 		return nil, err
 	}
 	return &root, nil

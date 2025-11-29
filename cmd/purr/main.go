@@ -97,11 +97,10 @@ func main() {
 		// Continue without history
 	}
 
-	// Load kubectl command specifications
-	root, err := kubecomplete.LoadRootSpecFromFile("kubectl_commands.json")
+	// Load kubectl command specifications (embedded in binary)
+	root, err := kubecomplete.LoadRootSpec()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error loading kubectl commands spec: %v\n", err)
-		fmt.Fprintf(os.Stderr, "Make sure kubectl_commands.json exists in the current directory.\n")
 		os.Exit(1)
 	}
 
