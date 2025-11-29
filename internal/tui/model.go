@@ -219,52 +219,48 @@ func (m *Model) getAutocompleteSuggestions(input string) []string {
 
 	// Don't suggest if no completer
 	if m.completer == nil {
-		debugLog("completer is nil")
 		return nil
 	}
 
-	// Always treat input as if it has trailing space for suggestion purposes
-	// This way we always suggest the next token, not completion of current token
-	completionLine := input
-	if len(input) > 0 && input[len(input)-1] != ' ' {
-		completionLine = input + " "
-	}
-
-	debugLog(fmt.Sprintf("input=%q completionLine=%q", input, completionLine))
-
 	// Use the new kubecomplete engine
 	ctx := kubecomplete.CompletionContext{
-		Line:             completionLine,
-		Cursor:           len(completionLine),
+		Line:             input,
+		Cursor:           len(input),
 		CurrentNamespace: m.namespace,
 	}
 
-	suggestions := m.completer.Complete(completionLine, len(completionLine), ctx)
-	debugLog(fmt.Sprintf("got %d suggestions from completer", len(suggestions)))
+	suggestions := m.completer.Complete(input, len(input), ctx)
 	if len(suggestions) == 0 {
 		return nil
 	}
 
-	// Extract just the suggestion values (next token only), not full commands
-	// Also filter by current partial token if user is typing one
+	// Check if user is typing a partial token (no trailing space)
+	hasTrailingSpace := len(input) > 0 && input[len(input)-1] == ' '
 	trimmed := strings.TrimSpace(input)
 	tokens := strings.Fields(trimmed)
 
-	// Determine if user is typing a partial token or finished with space
+	// Determine if we should filter by current partial token
 	var currentPartial string
-	if len(input) > 0 && input[len(input)-1] != ' ' && len(tokens) > 0 {
-		// User is typing a partial token - filter suggestions
-		currentPartial = tokens[len(tokens)-1]
+	if !hasTrailingSpace && len(tokens) > 0 {
+		// Check if the current tokens match a complete command
+		// If so, we're suggesting the next token, not completing the command
+		cmd, pathLen := m.completer.Registry.MatchCommand(tokens)
+		if cmd != nil && pathLen == len(tokens) {
+			// Tokens match a complete command - don't filter
+			currentPartial = ""
+		} else {
+			// Either no command match or partial match - filter by last token
+			currentPartial = tokens[len(tokens)-1]
+		}
 	}
 
 	result := make([]string, 0, len(suggestions))
 	for _, sug := range suggestions {
-		// Filter by partial token if typing
+		// Filter by partial token if we're typing one
 		if currentPartial != "" && !strings.HasPrefix(sug.Value, currentPartial) {
 			continue
 		}
 
-		// Return just the suggestion value (next token)
 		result = append(result, sug.Value)
 
 		if len(result) >= 20 { // Limit to 20 suggestions
