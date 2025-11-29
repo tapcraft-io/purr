@@ -156,10 +156,10 @@ func (m Model) handleTypingMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.String() {
 	case "tab", "right":
-		// Accept the top suggestion
-		if len(m.suggestions) > 0 {
+		// Accept the currently selected suggestion
+		if len(m.suggestions) > 0 && m.suggestionIndex < len(m.suggestions) {
 			currentInput := m.commandInput.Value()
-			suggestion := m.suggestions[0]
+			suggestion := m.suggestions[m.suggestionIndex]
 
 			// Determine how to append the suggestion
 			if len(currentInput) > 0 && currentInput[len(currentInput)-1] != ' ' {
@@ -176,8 +176,9 @@ func (m Model) handleTypingMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			m.commandInput.CursorEnd()
 
-			// Update suggestions for new input
+			// Update suggestions for new input and reset index
 			m.suggestions = m.getAutocompleteSuggestions(m.commandInput.Value())
+			m.suggestionIndex = 0
 			m.commandInput.SetSuggestions(m.suggestions)
 		}
 		return m, nil
@@ -218,7 +219,28 @@ func (m Model) handleTypingMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.cmdOutput = ""
 		m.viewport.SetContent("")
 		m.commandInput.SetValue("")
+		m.suggestionIndex = 0
 		m.commandInput.SetSuggestions([]string{"get", "describe", "logs", "apply", "delete", "exec", "create", "rollout", "scale"})
+		return m, nil
+
+	case "down", "ctrl+n":
+		// Cycle to next suggestion
+		if len(m.suggestions) > 0 {
+			m.suggestionIndex++
+			if m.suggestionIndex >= len(m.suggestions) {
+				m.suggestionIndex = 0
+			}
+		}
+		return m, nil
+
+	case "up", "ctrl+p":
+		// Cycle to previous suggestion
+		if len(m.suggestions) > 0 {
+			m.suggestionIndex--
+			if m.suggestionIndex < 0 {
+				m.suggestionIndex = len(m.suggestions) - 1
+			}
+		}
 		return m, nil
 
 	case "ctrl+space":
@@ -250,8 +272,13 @@ func (m Model) handleTypingMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	cmds = append(cmds, cmd)
 
 	// Update autocomplete suggestions after every keystroke
-	m.suggestions = m.getAutocompleteSuggestions(m.commandInput.Value())
-	// Still set them on the textinput for its built-in dropdown
+	newSuggestions := m.getAutocompleteSuggestions(m.commandInput.Value())
+	// Reset index if suggestions changed
+	if len(newSuggestions) != len(m.suggestions) || (len(newSuggestions) > 0 && len(m.suggestions) > 0 && newSuggestions[0] != m.suggestions[0]) {
+		m.suggestionIndex = 0
+	}
+	m.suggestions = newSuggestions
+	// Still set them on the textinput for its built-in ghost text
 	m.commandInput.SetSuggestions(m.suggestions)
 
 	return m, tea.Batch(cmds...)

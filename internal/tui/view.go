@@ -99,35 +99,60 @@ func (m Model) renderTypingMode() string {
 	inputView := m.commandInput.View()
 	b.WriteString(inputView)
 
-	// Add ghost text for top suggestion if available
-	if len(m.suggestions) > 0 && m.commandInput.Value() != "" {
-		ghostText := m.suggestions[0]
-		ghostStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240")) // dim gray
-		b.WriteString(ghostStyle.Render(ghostText))
-	}
+	// The textinput already shows ghost text for the current suggestion
+	// so we don't need to add extra ghost text here
 
 	b.WriteString("\n")
 
-	// Show suggestion list below input
+	// Show suggestion list below input with scrolling window
 	if len(m.suggestions) > 0 {
-		suggestionStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("244")) // lighter gray
-		maxSuggestions := 10
-		displayCount := len(m.suggestions)
-		if displayCount > maxSuggestions {
-			displayCount = maxSuggestions
+		suggestionStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("244"))          // lighter gray
+		selectedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("212")).Bold(true) // pink/magenta for selected
+		maxVisible := 10
+
+		// Calculate the visible window to keep selected item in view
+		startIdx := 0
+		endIdx := len(m.suggestions)
+
+		if len(m.suggestions) > maxVisible {
+			// Calculate window that keeps selected item visible
+			// Try to keep selected item in the middle when possible
+			halfWindow := maxVisible / 2
+
+			if m.suggestionIndex <= halfWindow {
+				// Near the start - show from beginning
+				startIdx = 0
+				endIdx = maxVisible
+			} else if m.suggestionIndex >= len(m.suggestions)-halfWindow {
+				// Near the end - show last items
+				startIdx = len(m.suggestions) - maxVisible
+				endIdx = len(m.suggestions)
+			} else {
+				// In the middle - center around selected
+				startIdx = m.suggestionIndex - halfWindow
+				endIdx = startIdx + maxVisible
+			}
 		}
 
-		for i := 0; i < displayCount; i++ {
-			prefix := "  "
-			if i == 0 {
-				prefix = "→ " // highlight first suggestion
-			}
-			b.WriteString(suggestionStyle.Render(prefix + m.suggestions[i]))
+		// Show scroll indicator at top if not showing from start
+		if startIdx > 0 {
+			b.WriteString(suggestionStyle.Render(fmt.Sprintf("  ↑ %d more above", startIdx)))
 			b.WriteString("\n")
 		}
 
-		if len(m.suggestions) > maxSuggestions {
-			b.WriteString(suggestionStyle.Render(fmt.Sprintf("  ... and %d more", len(m.suggestions)-maxSuggestions)))
+		for i := startIdx; i < endIdx; i++ {
+			sug := m.suggestions[i]
+			if i == m.suggestionIndex {
+				b.WriteString(selectedStyle.Render("→ " + sug))
+			} else {
+				b.WriteString(suggestionStyle.Render("  " + sug))
+			}
+			b.WriteString("\n")
+		}
+
+		// Show scroll indicator at bottom if more items below
+		if endIdx < len(m.suggestions) {
+			b.WriteString(suggestionStyle.Render(fmt.Sprintf("  ↓ %d more below", len(m.suggestions)-endIdx)))
 			b.WriteString("\n")
 		}
 	}

@@ -52,7 +52,8 @@ type Model struct {
 	completer *kubecomplete.Completer
 
 	// Autocomplete state
-	suggestions []string
+	suggestions     []string
+	suggestionIndex int // Currently selected suggestion (0 = first)
 
 	// Flags
 	ready        bool
@@ -295,4 +296,3 @@ func min(a, b int) int {
 	}
 	return b
 }
-
