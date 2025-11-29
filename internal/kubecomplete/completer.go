@@ -70,17 +70,18 @@ func (c *Completer) Complete(line string, cursor int, ctx CompletionContext) []S
 		return c.suggestTopLevelCommands(tokens[0])
 	}
 
-	// Check if there are subcommands available (e.g., "rollout" -> "rollout restart")
-	// This handles cases like typing "rollout" where we match the command but
-	// subcommands exist that should be suggested
-	if !hasTrailingSpace && pathLen == len(tokens) {
-		debugLog("Checking for subcommands (complete command, no trailing space)")
-		// We matched a complete command but might have subcommands
+	// Check if there are subcommands available
+	// Cases: "rollout" -> "restart", "rollout r" -> "restart", etc.
+	// If we matched a partial path OR a complete command without trailing space,
+	// check for subcommands before suggesting positionals
+	if pathLen < len(tokens) || (!hasTrailingSpace && pathLen == len(tokens)) {
+		debugLog(fmt.Sprintf("Checking for subcommands (pathLen=%d < len(tokens)=%d OR no trailing space)", pathLen, len(tokens)))
 		subcommands := c.suggestSubcommands(tokens)
 		debugLog(fmt.Sprintf("suggestSubcommands returned %d results", len(subcommands)))
 		if len(subcommands) > 0 {
 			return subcommands
 		}
+		debugLog("No subcommands found, continuing to positionals/flags")
 	}
 
 	args := tokens[pathLen:] // after command path
