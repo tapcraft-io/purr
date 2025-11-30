@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -64,6 +65,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.suggestions = []string{"get", "describe", "logs", "apply", "delete", "exec", "create", "rollout", "scale"}
 		m.suggestionIndex = 0
 		m.commandInput.SetSuggestions(m.suggestions)
+
+	case exec.PaneOutputMsg:
+		// Handle output from a pane
+		paneIdx := m.findPaneByID(msg.PaneID)
+		if paneIdx >= 0 {
+			m.panes[paneIdx].Output.WriteString(msg.Output)
+			content := m.panes[paneIdx].Output.String()
+			m.panes[paneIdx].Viewport.SetContent(content)
+			m.panes[paneIdx].Viewport.GotoBottom()
+		}
+
+	case exec.PaneCompleteMsg:
+		// Handle pane completion
+		paneIdx := m.findPaneByID(msg.PaneID)
+		if paneIdx >= 0 {
+			if msg.Error != nil {
+				m.panes[paneIdx].Status = types.PaneStatusError
+			} else {
+				m.panes[paneIdx].Status = types.PaneStatusCompleted
+			}
+			m.panes[paneIdx].ExitCode = msg.ExitCode
+		}
 
 	case errMsg:
 		m.err = msg.err
@@ -232,6 +255,23 @@ func (m Model) handleTypingMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 		// Execute the command
 		if m.executor != nil {
+			// Check if this is a long-running command that should run in a pane
+			if isLongRunningCommand(command) {
+				// Create a context with cancellation for this pane
+				ctx, cancel := context.WithCancel(context.Background())
+				paneID := m.createPane(command, cancel)
+
+				// Clear the input for the next command
+				m.commandInput.SetValue("")
+				m.suggestions = []string{"get", "describe", "logs", "apply", "delete", "exec", "create", "rollout", "scale"}
+				m.suggestionIndex = 0
+				m.commandInput.SetSuggestions(m.suggestions)
+
+				// Start streaming execution
+				return m, m.executor.ExecuteStreaming(ctx, command, paneID)
+			}
+
+			// Regular command - use traditional execution
 			return m, executeCommand(m.executor, command)
 		}
 
@@ -259,6 +299,23 @@ func (m Model) handleTypingMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.commandInput.SetValue("")
 		m.suggestionIndex = 0
 		m.commandInput.SetSuggestions([]string{"get", "describe", "logs", "apply", "delete", "exec", "create", "rollout", "scale"})
+		return m, nil
+
+	case "ctrl+]":
+		// Cycle to next pane
+		m.cyclePaneForward()
+		return m, nil
+
+	case "ctrl+[":
+		// Cycle to previous pane
+		m.cyclePaneBackward()
+		return m, nil
+
+	case "ctrl+w":
+		// Close active pane
+		if len(m.panes) > 0 && m.activePaneIndex >= 0 && m.activePaneIndex < len(m.panes) {
+			m.removePane(m.activePaneIndex)
+		}
 		return m, nil
 
 	case "down", "ctrl+n":

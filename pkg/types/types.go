@@ -1,6 +1,18 @@
 package types
 
-import "time"
+import (
+	"context"
+	"time"
+)
+
+// PaneStatus represents the status of a command pane
+type PaneStatus int
+
+const (
+	PaneStatusRunning PaneStatus = iota
+	PaneStatusCompleted
+	PaneStatusError
+)
 
 // Mode represents the current interaction mode
 type Mode int
@@ -69,4 +81,14 @@ type ListItem struct {
 
 func (i ListItem) FilterValue() string {
 	return i.Title
+}
+
+// CommandPane represents a running command in a pane
+type CommandPane struct {
+	ID        int
+	Command   string
+	StartTime time.Time
+	Status    PaneStatus
+	ExitCode  int
+	Cancel    context.CancelFunc
 }

@@ -167,8 +167,11 @@ func (m Model) renderTypingMode() string {
 		b.WriteString("\n\n")
 	}
 
-	// Show last output in viewport if available (limited height to leave room for input)
-	if m.cmdOutput != "" {
+	// Show panes if there are any, otherwise show last output
+	if len(m.panes) > 0 {
+		b.WriteString(m.renderPanes())
+	} else if m.cmdOutput != "" {
+		// Show last output in viewport if available (limited height to leave room for input)
 		// Calculate available height for output
 		// Reserve space for: title(2) + prompt(1) + suggestions(~12) + help(2) + padding(3) = ~20 lines
 		maxOutputHeight := m.height - 20
@@ -334,6 +337,99 @@ func (m Model) renderConfirmingMode() string {
 	return b.String()
 }
 
+// renderPanes renders all command panes in a tiled layout
+func (m Model) renderPanes() string {
+	if len(m.panes) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+
+	// Calculate dimensions for panes
+	// For now, we'll use a simple horizontal tiling
+	availableWidth := m.width - 4
+	availableHeight := m.height - 25 // Reserve space for input, suggestions, help
+
+	// Each pane gets equal width
+	paneWidth := availableWidth / len(m.panes)
+	if paneWidth < 20 {
+		paneWidth = 20 // Minimum width
+	}
+
+	// Render panes side by side
+	var paneViews []string
+	for i, pane := range m.panes {
+		isActive := i == m.activePaneIndex
+
+		// Create border style based on active state
+		var borderStyle lipgloss.Style
+		if isActive {
+			borderStyle = lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(lipgloss.Color("212")). // Pink for active
+				Padding(0, 1).
+				Width(paneWidth - 2).
+				Height(availableHeight)
+		} else {
+			borderStyle = lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(lipgloss.Color("240")). // Gray for inactive
+				Padding(0, 1).
+				Width(paneWidth - 2).
+				Height(availableHeight)
+		}
+
+		// Create header with command and status
+		statusSymbol := "●"
+		statusColor := "yellow"
+		switch pane.Status {
+		case types.PaneStatusRunning:
+			statusSymbol = "●"
+			statusColor = "green"
+		case types.PaneStatusCompleted:
+			statusSymbol = "✓"
+			statusColor = "blue"
+		case types.PaneStatusError:
+			statusSymbol = "✗"
+			statusColor = "red"
+		}
+
+		statusStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(statusColor)).Bold(true)
+		cmdStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+
+		header := fmt.Sprintf("%s %s",
+			statusStyle.Render(statusSymbol),
+			cmdStyle.Render(truncate(pane.Command, paneWidth-6)),
+		)
+
+		// Get output content
+		content := pane.Output.String()
+		if content == "" {
+			content = "Waiting for output..."
+		}
+
+		// Limit output to available height
+		lines := strings.Split(content, "\n")
+		maxLines := availableHeight - 3 // Reserve space for header
+		if len(lines) > maxLines {
+			lines = lines[len(lines)-maxLines:] // Show most recent lines
+		}
+		displayContent := strings.Join(lines, "\n")
+
+		// Combine header and content
+		paneContent := header + "\n" + strings.Repeat("─", paneWidth-4) + "\n" + displayContent
+
+		paneView := borderStyle.Render(paneContent)
+		paneViews = append(paneViews, paneView)
+	}
+
+	// Join panes horizontally
+	b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, paneViews...))
+	b.WriteString("\n\n")
+
+	return b.String()
+}
+
 // renderHelpBar renders the help bar at the bottom
 func (m Model) renderHelpBar() string {
 	items := []string{
@@ -341,6 +437,11 @@ func (m Model) renderHelpBar() string {
 		"[↑↓] cycle",
 		"[@] file",
 		"[Ctrl+R] history",
+	}
+
+	// Add pane-specific help if there are panes
+	if len(m.panes) > 0 {
+		items = append(items, "[Ctrl+]] next pane", "[Ctrl+[] prev pane", "[Ctrl+W] close pane")
 	}
 
 	// Add output-specific help if there's output
