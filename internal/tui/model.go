@@ -20,6 +20,13 @@ import (
 	"github.com/tapcraft-io/purr/pkg/types"
 )
 
+// PaneData holds the runtime data for a command pane
+type PaneData struct {
+	types.CommandPane
+	Output   *strings.Builder // Pointer to avoid copy issues with BubbleTea
+	Viewport viewport.Model
+}
+
 // Model represents the application state
 type Model struct {
 	// UI Components
@@ -46,6 +53,11 @@ type Model struct {
 	lastCmd    string
 	cmdOutput  string
 	cmdError   error
+
+	// Pane State (for parallel execution)
+	panes           []PaneData
+	activePaneIndex int
+	nextPaneID      int
 
 	// Services
 	history   *history.History
@@ -124,6 +136,8 @@ func NewModel(cache k8s.Cache, hist *history.History, ctx, kubeconfig string, co
 		spinner:      s,
 		filePicker:   fp,
 		mode:         types.ModeTyping,
+		width:        80, // Sensible default, will be updated on WindowSizeMsg
+		height:       24, // Sensible default, will be updated on WindowSizeMsg
 		cache:        cache,
 		history:      hist,
 		context:      ctx,
@@ -306,4 +320,116 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// Helper methods for pane management
+
+// createPane creates a new pane for a command
+func (m *Model) createPane(command string, cancel context.CancelFunc) int {
+	paneID := m.nextPaneID
+	m.nextPaneID++
+
+	vp := viewport.New(80, 20)
+	vp.Style = viewportStyle
+
+	pane := PaneData{
+		CommandPane: types.CommandPane{
+			ID:        paneID,
+			Command:   command,
+			StartTime: time.Now(),
+			Status:    types.PaneStatusRunning,
+			Cancel:    cancel,
+		},
+		Output:   &strings.Builder{}, // Use pointer to avoid copy issues
+		Viewport: vp,
+	}
+
+	m.panes = append(m.panes, pane)
+	m.activePaneIndex = len(m.panes) - 1
+
+	return paneID
+}
+
+// removePane removes a pane by index
+func (m *Model) removePane(index int) {
+	if index < 0 || index >= len(m.panes) {
+		return
+	}
+
+	// Cancel the command if it's still running
+	if m.panes[index].Cancel != nil {
+		m.panes[index].Cancel()
+	}
+
+	// Remove the pane
+	m.panes = append(m.panes[:index], m.panes[index+1:]...)
+
+	// Adjust active pane index
+	if m.activePaneIndex >= len(m.panes) && len(m.panes) > 0 {
+		m.activePaneIndex = len(m.panes) - 1
+	} else if len(m.panes) == 0 {
+		m.activePaneIndex = 0
+	}
+}
+
+// findPaneByID finds a pane by its ID and returns its index
+func (m *Model) findPaneByID(paneID int) int {
+	for i, pane := range m.panes {
+		if pane.ID == paneID {
+			return i
+		}
+	}
+	return -1
+}
+
+// cyclePaneForward moves to the next pane
+func (m *Model) cyclePaneForward() {
+	if len(m.panes) == 0 {
+		return
+	}
+	m.activePaneIndex = (m.activePaneIndex + 1) % len(m.panes)
+}
+
+// cyclePaneBackward moves to the previous pane
+func (m *Model) cyclePaneBackward() {
+	if len(m.panes) == 0 {
+		return
+	}
+	m.activePaneIndex--
+	if m.activePaneIndex < 0 {
+		m.activePaneIndex = len(m.panes) - 1
+	}
+}
+
+// isLongRunningCommand checks if a command is likely to be long-running
+func isLongRunningCommand(command string) bool {
+	trimmed := strings.TrimSpace(command)
+
+	// Shell commands with certain patterns are long-running
+	if strings.HasPrefix(trimmed, "!") {
+		shellCmd := strings.TrimSpace(strings.TrimPrefix(trimmed, "!"))
+		// Note: top/htop require TTY, use "top -b" for batch mode
+		longRunningPrefixes := []string{
+			"tail -f",
+			"tail -F",
+			"watch",
+			"top -b", // batch mode only
+			"vmstat",
+			"iostat",
+			"dmesg -w",
+		}
+
+		for _, prefix := range longRunningPrefixes {
+			if strings.HasPrefix(shellCmd, prefix) {
+				return true
+			}
+		}
+	}
+
+	// kubectl commands that stream
+	if strings.Contains(trimmed, "logs") && strings.Contains(trimmed, "-f") {
+		return true
+	}
+
+	return false
 }
