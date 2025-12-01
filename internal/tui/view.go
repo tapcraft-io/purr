@@ -167,44 +167,25 @@ func (m Model) renderTypingMode() string {
 		b.WriteString("\n\n")
 	}
 
-	// Show panes if there are any, otherwise show last output
+	// Show output section - this includes both panes (streaming) and last output (non-blocking)
+	// Both can be shown at the same time
+	hasOutput := false
+
+	// First show streaming panes if any
 	if len(m.panes) > 0 {
 		b.WriteString(m.renderPanes())
-	} else if m.cmdOutput != "" {
-		// Show last output in viewport if available (limited height to leave room for input)
-		// Calculate available height for output
-		// Reserve space for: title(2) + prompt(1) + suggestions(~12) + help(2) + padding(3) = ~20 lines
-		maxOutputHeight := m.height - 20
-		if maxOutputHeight < 5 {
-			maxOutputHeight = 5
-		}
-		if maxOutputHeight > 20 {
-			maxOutputHeight = 20 // Cap output height
-		}
+		hasOutput = true
+	}
 
-		// Create a limited viewport view
-		lines := strings.Split(m.cmdOutput, "\n")
-		displayLines := lines
-		hasMore := false
-		if len(lines) > maxOutputHeight {
-			displayLines = lines[:maxOutputHeight]
-			hasMore = true
-		}
+	// Then show last command output (non-blocking) if available and different from pane content
+	if m.cmdOutput != "" {
+		b.WriteString(m.renderLastOutput())
+		hasOutput = true
+	}
 
-		outputStyle := lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("240")).
-			Padding(0, 1).
-			Width(m.width - 4)
-
-		output := strings.Join(displayLines, "\n")
-		if hasMore {
-			moreStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Italic(true)
-			output += "\n" + moreStyle.Render(fmt.Sprintf("... %d more lines (Ctrl+O to view full output)", len(lines)-maxOutputHeight))
-		}
-
-		b.WriteString(outputStyle.Render(output))
-		b.WriteString("\n\n")
+	// Add some spacing if we had output
+	if hasOutput {
+		b.WriteString("\n")
 	}
 
 	// Help bar
@@ -337,6 +318,83 @@ func (m Model) renderConfirmingMode() string {
 	return b.String()
 }
 
+// renderLastOutput renders the last command output in a pane-like style
+func (m Model) renderLastOutput() string {
+	if m.cmdOutput == "" {
+		return ""
+	}
+
+	var b strings.Builder
+
+	// Calculate dimensions - similar to pane rendering
+	outputWidth := m.width - 4
+	if outputWidth < 20 {
+		outputWidth = 20
+	}
+
+	// Max height for output - keep it small to not overwhelm UI
+	// If panes exist, make this even smaller
+	maxOutputHeight := 8
+	if len(m.panes) > 0 {
+		maxOutputHeight = 5 // Smaller when panes are shown
+	}
+
+	// Get content
+	lines := strings.Split(m.cmdOutput, "\n")
+	totalLines := len(lines)
+	hasMore := false
+	if len(lines) > maxOutputHeight {
+		lines = lines[:maxOutputHeight]
+		hasMore = true
+	}
+
+	// Create header with command and status
+	statusSymbol := "✓"
+	statusColor := "blue"
+	if m.cmdError != nil {
+		statusSymbol = "✗"
+		statusColor = "red"
+	}
+
+	statusStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(statusColor)).Bold(true)
+	cmdStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+
+	truncateWidth := outputWidth - 6
+	if truncateWidth < 1 {
+		truncateWidth = 1
+	}
+	header := fmt.Sprintf("%s %s",
+		statusStyle.Render(statusSymbol),
+		cmdStyle.Render(truncate(m.lastCmd, truncateWidth)),
+	)
+
+	// Build output content
+	displayContent := strings.Join(lines, "\n")
+	if hasMore {
+		moreStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Italic(true)
+		displayContent += "\n" + moreStyle.Render(fmt.Sprintf("... %d more lines (Ctrl+O to view)", totalLines-maxOutputHeight))
+	}
+
+	// Separator
+	separatorWidth := outputWidth - 4
+	if separatorWidth < 1 {
+		separatorWidth = 1
+	}
+	paneContent := header + "\n" + strings.Repeat("─", separatorWidth) + "\n" + displayContent
+
+	// Create border style
+	borderStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("240")).
+		Padding(0, 1).
+		Width(outputWidth - 2)
+
+	b.WriteString(borderStyle.Render(paneContent))
+	b.WriteString("\n")
+
+	return b.String()
+}
+
 // renderPanes renders all command panes in a tiled layout
 func (m Model) renderPanes() string {
 	if len(m.panes) == 0 {
@@ -348,7 +406,17 @@ func (m Model) renderPanes() string {
 	// Calculate dimensions for panes
 	// For now, we'll use a simple horizontal tiling
 	availableWidth := m.width - 4
-	availableHeight := m.height - 25 // Reserve space for input, suggestions, help
+	if availableWidth < 20 {
+		availableWidth = 20 // Minimum width
+	}
+
+	// Keep panes small - max 8 lines to leave room for other UI elements
+	maxPaneHeight := 8
+
+	// If there's also last output, make panes even smaller
+	if m.cmdOutput != "" {
+		maxPaneHeight = 6
+	}
 
 	// Each pane gets equal width
 	paneWidth := availableWidth / len(m.panes)
@@ -361,23 +429,39 @@ func (m Model) renderPanes() string {
 	for i, pane := range m.panes {
 		isActive := i == m.activePaneIndex
 
+		// Get output content
+		content := pane.Output.String()
+		if content == "" {
+			content = "Waiting for output..."
+		}
+
+		// Limit output to available height
+		allLines := strings.Split(content, "\n")
+		totalLines := len(allLines)
+		maxLines := maxPaneHeight - 2 // Reserve space for header and separator
+		if maxLines < 1 {
+			maxLines = 1 // Ensure at least 1 line
+		}
+
+		// Show most recent lines
+		lines := allLines
+		hasMore := false
+		if totalLines > maxLines {
+			lines = allLines[totalLines-maxLines:] // Show most recent lines
+			hasMore = true
+		}
+
 		// Create border style based on active state
 		var borderStyle lipgloss.Style
+		borderColor := "240" // Gray for inactive
 		if isActive {
-			borderStyle = lipgloss.NewStyle().
-				Border(lipgloss.RoundedBorder()).
-				BorderForeground(lipgloss.Color("212")). // Pink for active
-				Padding(0, 1).
-				Width(paneWidth - 2).
-				Height(availableHeight)
-		} else {
-			borderStyle = lipgloss.NewStyle().
-				Border(lipgloss.RoundedBorder()).
-				BorderForeground(lipgloss.Color("240")). // Gray for inactive
-				Padding(0, 1).
-				Width(paneWidth - 2).
-				Height(availableHeight)
+			borderColor = "212" // Pink for active
 		}
+		borderStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color(borderColor)).
+			Padding(0, 1).
+			Width(paneWidth - 2)
 
 		// Create header with command and status
 		statusSymbol := "●"
@@ -397,27 +481,29 @@ func (m Model) renderPanes() string {
 		statusStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(statusColor)).Bold(true)
 		cmdStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
 
+		truncateWidth := paneWidth - 6
+		if truncateWidth < 1 {
+			truncateWidth = 1
+		}
 		header := fmt.Sprintf("%s %s",
 			statusStyle.Render(statusSymbol),
-			cmdStyle.Render(truncate(pane.Command, paneWidth-6)),
+			cmdStyle.Render(truncate(pane.Command, truncateWidth)),
 		)
 
-		// Get output content
-		content := pane.Output.String()
-		if content == "" {
-			content = "Waiting for output..."
-		}
-
-		// Limit output to available height
-		lines := strings.Split(content, "\n")
-		maxLines := availableHeight - 3 // Reserve space for header
-		if len(lines) > maxLines {
-			lines = lines[len(lines)-maxLines:] // Show most recent lines
-		}
 		displayContent := strings.Join(lines, "\n")
 
+		// Add "more lines" indicator if content was truncated
+		if hasMore {
+			moreStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Italic(true)
+			displayContent += "\n" + moreStyle.Render(fmt.Sprintf("↑ %d more (Ctrl+O)", totalLines-maxLines))
+		}
+
 		// Combine header and content
-		paneContent := header + "\n" + strings.Repeat("─", paneWidth-4) + "\n" + displayContent
+		separatorWidth := paneWidth - 4
+		if separatorWidth < 1 {
+			separatorWidth = 1
+		}
+		paneContent := header + "\n" + strings.Repeat("─", separatorWidth) + "\n" + displayContent
 
 		paneView := borderStyle.Render(paneContent)
 		paneViews = append(paneViews, paneView)
@@ -425,7 +511,7 @@ func (m Model) renderPanes() string {
 
 	// Join panes horizontally
 	b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, paneViews...))
-	b.WriteString("\n\n")
+	b.WriteString("\n")
 
 	return b.String()
 }
@@ -441,12 +527,16 @@ func (m Model) renderHelpBar() string {
 
 	// Add pane-specific help if there are panes
 	if len(m.panes) > 0 {
-		items = append(items, "[Ctrl+]] next pane", "[Ctrl+[] prev pane", "[Ctrl+W] close pane")
+		items = append(items, "[Alt+N] next", "[Alt+P] prev", "[Ctrl+W] close")
 	}
 
-	// Add output-specific help if there's output
+	// Add output-specific help if there's output or panes
+	if m.cmdOutput != "" || len(m.panes) > 0 {
+		items = append(items, "[Ctrl+O] full output")
+	}
+
 	if m.cmdOutput != "" {
-		items = append(items, "[Ctrl+O] full output", "[Ctrl+L] clear")
+		items = append(items, "[Ctrl+L] clear")
 	}
 
 	items = append(items, "[Ctrl+C] quit")

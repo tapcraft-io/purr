@@ -69,11 +69,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case exec.PaneOutputMsg:
 		// Handle output from a pane
 		paneIdx := m.findPaneByID(msg.PaneID)
-		if paneIdx >= 0 {
+		if paneIdx >= 0 && msg.Output != "" {
 			m.panes[paneIdx].Output.WriteString(msg.Output)
 			content := m.panes[paneIdx].Output.String()
 			m.panes[paneIdx].Viewport.SetContent(content)
 			m.panes[paneIdx].Viewport.GotoBottom()
+		}
+		// Continue streaming if there's a next command
+		if msg.NextCmd != nil {
+			cmds = append(cmds, msg.NextCmd)
 		}
 
 	case exec.PaneCompleteMsg:
@@ -286,8 +290,20 @@ func (m Model) handleTypingMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "ctrl+o":
-		// View full output
-		if m.cmdOutput != "" {
+		// View full output - prioritize active pane if there are panes
+		if len(m.panes) > 0 && m.activePaneIndex >= 0 && m.activePaneIndex < len(m.panes) {
+			// Show active pane's output in the viewport
+			paneOutput := m.panes[m.activePaneIndex].Output.String()
+			if paneOutput != "" {
+				m.viewport.SetContent(paneOutput)
+				m.viewport.GotoBottom()
+				m.lastCmd = m.panes[m.activePaneIndex].Command
+				m.mode = types.ModeViewingOutput
+			}
+		} else if m.cmdOutput != "" {
+			// Fall back to last command output
+			m.viewport.SetContent(m.cmdOutput)
+			m.viewport.GotoTop()
 			m.mode = types.ModeViewingOutput
 		}
 		return m, nil
@@ -301,12 +317,12 @@ func (m Model) handleTypingMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.commandInput.SetSuggestions([]string{"get", "describe", "logs", "apply", "delete", "exec", "create", "rollout", "scale"})
 		return m, nil
 
-	case "ctrl+]":
+	case "alt+n":
 		// Cycle to next pane
 		m.cyclePaneForward()
 		return m, nil
 
-	case "ctrl+[":
+	case "alt+p":
 		// Cycle to previous pane
 		m.cyclePaneBackward()
 		return m, nil

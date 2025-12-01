@@ -191,9 +191,11 @@ func GetCommandVerb(command string) string {
 }
 
 // PaneOutputMsg represents a chunk of output for a command pane
+// It includes a NextCmd that should be called to continue streaming
 type PaneOutputMsg struct {
-	PaneID int
-	Output string
+	PaneID  int
+	Output  string
+	NextCmd tea.Cmd // Call this to continue streaming
 }
 
 // PaneCompleteMsg indicates a pane command has completed
@@ -205,135 +207,158 @@ type PaneCompleteMsg struct {
 
 // ExecuteStreaming runs a command and streams output via tea messages
 func (e *Executor) ExecuteStreaming(ctx context.Context, command string, paneID int) tea.Cmd {
-	return func() tea.Msg {
-		// Start the command execution in a goroutine and return a Cmd
-		// that listens for output
-		trimmed := strings.TrimSpace(command)
+	trimmed := strings.TrimSpace(command)
 
-		var cmd *exec.Cmd
-		if strings.HasPrefix(trimmed, "!") {
-			shellCmd := strings.TrimSpace(strings.TrimPrefix(trimmed, "!"))
-			if shellCmd == "" {
+	var cmd *exec.Cmd
+	if strings.HasPrefix(trimmed, "!") {
+		shellCmd := strings.TrimSpace(strings.TrimPrefix(trimmed, "!"))
+		if shellCmd == "" {
+			return func() tea.Msg {
 				return PaneCompleteMsg{
 					PaneID:   paneID,
 					ExitCode: 1,
 					Error:    fmt.Errorf("empty shell command"),
 				}
 			}
-			cmd = exec.CommandContext(ctx, "sh", "-c", shellCmd)
-		} else {
-			args := parseCommandString(trimmed)
-			cmd = exec.CommandContext(ctx, e.kubectlPath, args...)
 		}
+		cmd = exec.CommandContext(ctx, "sh", "-c", shellCmd)
+	} else {
+		args := parseCommandString(trimmed)
+		cmd = exec.CommandContext(ctx, e.kubectlPath, args...)
+	}
 
-		// Create pipes for stdout and stderr
-		stdout, err := cmd.StdoutPipe()
-		if err != nil {
+	// Create pipes for stdout and stderr
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return func() tea.Msg {
 			return PaneCompleteMsg{
 				PaneID:   paneID,
 				ExitCode: -1,
 				Error:    fmt.Errorf("failed to create stdout pipe: %w", err),
 			}
 		}
+	}
 
-		stderr, err := cmd.StderrPipe()
-		if err != nil {
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return func() tea.Msg {
 			return PaneCompleteMsg{
 				PaneID:   paneID,
 				ExitCode: -1,
 				Error:    fmt.Errorf("failed to create stderr pipe: %w", err),
 			}
 		}
+	}
 
-		// Start the command
-		if err := cmd.Start(); err != nil {
+	// Start the command
+	if err := cmd.Start(); err != nil {
+		return func() tea.Msg {
 			return PaneCompleteMsg{
 				PaneID:   paneID,
 				ExitCode: -1,
 				Error:    fmt.Errorf("failed to start command: %w", err),
 			}
 		}
-
-		// Return a command that will stream the output
-		return streamOutput(paneID, stdout, stderr, cmd)
 	}
+
+	// Create channel for streaming
+	outputChan := make(chan string, 100)
+
+	// Start goroutine to read output
+	go func() {
+		defer close(outputChan)
+
+		reader := io.MultiReader(stdout, stderr)
+		scanner := bufio.NewScanner(reader)
+		// Increase buffer size for long lines
+		buf := make([]byte, 0, 64*1024)
+		scanner.Buffer(buf, 1024*1024)
+
+		for scanner.Scan() {
+			select {
+			case outputChan <- scanner.Text() + "\n":
+			case <-ctx.Done():
+				return
+			}
+		}
+
+		// Wait for command to finish
+		cmd.Wait()
+	}()
+
+	// Return a command that waits for the first output
+	return waitForPaneOutput(paneID, outputChan, cmd)
 }
 
-// streamOutput creates a tea.Cmd that streams output from the command
-func streamOutput(paneID int, stdout, stderr io.Reader, cmd *exec.Cmd) tea.Cmd {
+// waitForPaneOutput returns a tea.Cmd that waits for output from a pane
+func waitForPaneOutput(paneID int, outputChan <-chan string, cmd *exec.Cmd) tea.Cmd {
 	return func() tea.Msg {
-		// Use a buffered channel to collect output lines
-		outputChan := make(chan string, 100)
-
-		// Start goroutine to read output
-		go func() {
-			reader := io.MultiReader(stdout, stderr)
-			scanner := bufio.NewScanner(reader)
-			// Increase buffer size for long lines
-			buf := make([]byte, 0, 64*1024)
-			scanner.Buffer(buf, 1024*1024)
-
-			for scanner.Scan() {
-				outputChan <- scanner.Text() + "\n"
-			}
-			close(outputChan)
-		}()
-
-		// Collect output in batches
+		// Try to collect some output with a small timeout
 		var output strings.Builder
-		batchSize := 0
-		maxBatchSize := 50 // Send updates every 50 lines or 500ms
+		timeout := time.NewTimer(100 * time.Millisecond)
+		defer timeout.Stop()
 
-		ticker := time.NewTicker(500 * time.Millisecond)
-		defer ticker.Stop()
-
+		// Collect output until timeout or channel closed
 		for {
 			select {
 			case line, ok := <-outputChan:
 				if !ok {
-					// No more output, wait for process to finish
-					goto waitForCompletion
+					// Channel closed - command finished
+					if output.Len() > 0 {
+						// Return final output with no next command
+						return PaneOutputMsg{
+							PaneID:  paneID,
+							Output:  output.String(),
+							NextCmd: completionCmd(paneID, cmd),
+						}
+					}
+					// No output, just return completion
+					return completionMsg(paneID, cmd)
 				}
 				output.WriteString(line)
-				batchSize++
-
-				// Send batch if we've collected enough lines
-				if batchSize >= maxBatchSize {
-					// Note: We can only return one message, so we accumulate all
-					// For true streaming, we'd need a different pattern
-					batchSize = 0
+				// Reset timer to collect more output in this batch
+				if !timeout.Stop() {
+					select {
+					case <-timeout.C:
+					default:
+					}
 				}
+				timeout.Reset(50 * time.Millisecond)
 
-			case <-ticker.C:
-				// Periodic check - continue accumulating
-				continue
+			case <-timeout.C:
+				// Timeout - return what we have and schedule next read
+				if output.Len() > 0 {
+					return PaneOutputMsg{
+						PaneID:  paneID,
+						Output:  output.String(),
+						NextCmd: waitForPaneOutput(paneID, outputChan, cmd),
+					}
+				}
+				// No output yet, keep waiting (return another wait command)
+				return PaneOutputMsg{
+					PaneID:  paneID,
+					Output:  "",
+					NextCmd: waitForPaneOutput(paneID, outputChan, cmd),
+				}
 			}
-		}
-
-	waitForCompletion:
-		// Wait for command to complete
-		err := cmd.Wait()
-		exitCode := 0
-		if err != nil {
-			if exitErr, ok := err.(*exec.ExitError); ok {
-				exitCode = exitErr.ExitCode()
-			} else {
-				exitCode = -1
-			}
-		}
-
-		// Send final output if we have any
-		if output.Len() > 0 {
-			return PaneOutputMsg{
-				PaneID: paneID,
-				Output: output.String(),
-			}
-		}
-
-		return PaneCompleteMsg{
-			PaneID:   paneID,
-			ExitCode: exitCode,
-			Error:    err,
 		}
 	}
+}
+
+// completionCmd returns a command that produces the completion message
+func completionCmd(paneID int, cmd *exec.Cmd) tea.Cmd {
+	return func() tea.Msg {
+		return completionMsg(paneID, cmd)
+	}
+}
+
+// completionMsg creates the completion message for a pane
+func completionMsg(paneID int, cmd *exec.Cmd) PaneCompleteMsg {
+	exitCode := 0
+	var err error
+	if cmd.ProcessState != nil && !cmd.ProcessState.Success() {
+		exitCode = cmd.ProcessState.ExitCode()
+		err = fmt.Errorf("command exited with code %d", exitCode)
+	}
+	return PaneCompleteMsg{PaneID: paneID, ExitCode: exitCode, Error: err}
 }

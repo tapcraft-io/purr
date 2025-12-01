@@ -23,7 +23,7 @@ import (
 // PaneData holds the runtime data for a command pane
 type PaneData struct {
 	types.CommandPane
-	Output   strings.Builder
+	Output   *strings.Builder // Pointer to avoid copy issues with BubbleTea
 	Viewport viewport.Model
 }
 
@@ -136,6 +136,8 @@ func NewModel(cache k8s.Cache, hist *history.History, ctx, kubeconfig string, co
 		spinner:      s,
 		filePicker:   fp,
 		mode:         types.ModeTyping,
+		width:        80, // Sensible default, will be updated on WindowSizeMsg
+		height:       24, // Sensible default, will be updated on WindowSizeMsg
 		cache:        cache,
 		history:      hist,
 		context:      ctx,
@@ -338,7 +340,7 @@ func (m *Model) createPane(command string, cancel context.CancelFunc) int {
 			Status:    types.PaneStatusRunning,
 			Cancel:    cancel,
 		},
-		Output:   strings.Builder{},
+		Output:   &strings.Builder{}, // Use pointer to avoid copy issues
 		Viewport: vp,
 	}
 
@@ -406,13 +408,15 @@ func isLongRunningCommand(command string) bool {
 	// Shell commands with certain patterns are long-running
 	if strings.HasPrefix(trimmed, "!") {
 		shellCmd := strings.TrimSpace(strings.TrimPrefix(trimmed, "!"))
+		// Note: top/htop require TTY, use "top -b" for batch mode
 		longRunningPrefixes := []string{
 			"tail -f",
 			"tail -F",
 			"watch",
-			"top",
-			"htop",
-			"less +F",
+			"top -b", // batch mode only
+			"vmstat",
+			"iostat",
+			"dmesg -w",
 		}
 
 		for _, prefix := range longRunningPrefixes {
